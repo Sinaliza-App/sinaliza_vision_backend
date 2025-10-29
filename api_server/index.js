@@ -6,6 +6,7 @@ const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcryptjs'); // Para hashear senhas
 const jwt = require('jsonwebtoken'); // Para gerar tokens de login
+const authMiddleware = require('./authMiddleware');
 const { Pool } = require('pg'); // Para o PostgreSQL
 
 // --- Configuração da Aplicação ---
@@ -31,14 +32,37 @@ app.use(express.json()); // Permite que o servidor leia JSON no corpo das requis
  * Rota de Teste (GET /)
  * Verifica se a API está online.
  */
-app.get('/', (req, res) => {
-  res.send('A API de Usuários (Node.js) do Sinaliza está funcionando!');
+app.get('/users/me', authMiddleware, async (req, res) => {
+  try {
+    // 2. Graças ao middleware, agora temos o `req.user`
+    //    com os dados que estavam dentro do token (id, email).
+    const userId = req.user.id;
+
+    const client = await pool.connect();
+    try {
+      // 3. Buscamos o usuário no banco usando o ID do token
+      const result = await client.query('SELECT id, name, email, created_at FROM users WHERE id = $1', [userId]);
+
+      if (result.rows.length === 0) {
+        return res.status(404).json({ message: 'Usuário não encontrado.' });
+      }
+
+      // 4. Retornamos os dados do usuário (sem a senha!)
+      res.status(200).json(result.rows[0]);
+
+    } catch (dbError) {
+      console.error('Erro no banco de dados:', dbError);
+      res.status(500).json({ message: 'Erro ao buscar usuário.' });
+    } finally {
+      client.release();
+    }
+    
+  } catch (error) {
+    console.error('Erro geral no servidor:', error);
+    res.status(500).json({ message: 'Erro no servidor' });
+  }
 });
 
-/**
- * Rota de Cadastro de Usuário (POST /users/register)
- * Recebe nome, email e senha, salva no banco.
- */
 app.post('/users/register', async (req, res) => {
   try {
     const { name, email, password } = req.body;
