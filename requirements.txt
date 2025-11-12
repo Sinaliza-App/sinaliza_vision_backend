@@ -1,0 +1,30 @@
+# Requisitos para Sistema de Detecção de Libras com YOLO
+
+# YOLO - Detecção de objetos
+ultralytics>=8.0.0
+
+# OpenCV - Processamento de imagem e vídeo
+opencv-python>=4.8.0
+
+# NumPy - Operações numéricas
+numpy>=1.24.0
+
+# PyTorch (será instalado automaticamente pelo ultralytics)
+# torch>=2.0.0
+# torchvision>=0.15.0
+
+# Outras dependências úteis
+Pillow>=10.0.0
+matplotlib>=3.7.0
+seaborn>=0.12.0
+tqdm>=4.65.0
+PyYAML>=6.0
+
+# Opcional: Para acelerar com GPU NVIDIA
+# Descomente as linhas abaixo se tiver GPU NVIDIA com CUDA
+# torch>=2.0.0+cu118
+# torchvision>=0.15.0+cu118
+# Instale com: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+
+
+
