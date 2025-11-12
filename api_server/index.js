@@ -6,7 +6,7 @@ const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcryptjs'); // Para hashear senhas
 const jwt = require('jsonwebtoken'); // Para gerar tokens de login
-const authMiddleware = require('./authMiddleware');
+const authMiddleware = require('./authMiddleware'); // Nosso "segurança"
 const { Pool } = require('pg'); // Para o PostgreSQL
 
 // --- Configuração da Aplicação ---
@@ -26,33 +26,79 @@ const pool = new Pool({
 app.use(cors()); // Permite que o Flutter acesse a API
 app.use(express.json()); // Permite que o servidor leia JSON no corpo das requisições
 
-// --- Rotas da API ---
+app.post('/progress', authMiddleware, async (req, res) => {
+  // O authMiddleware nos dá o 'req.user' com o ID do usuário logado
+  const userId = req.user.id;
+  
+  // O Flutter deve enviar o ID da lição no corpo da requisição
+  const { lesson_id } = req.body;
 
-/**
- * Rota de Teste (GET /)
- * Verifica se a API está online.
- */
-app.get('/users/me', authMiddleware, async (req, res) => {
+  if (!lesson_id) {
+    return res.status(400).json({ message: 'O ID da lição (lesson_id) é obrigatório.' });
+  }
+
+  console.log(`Usuário (ID: ${userId}) está salvando progresso para a lição (ID: ${lesson_id}).`);
+
   try {
-    // 2. Graças ao middleware, agora temos o `req.user`
-    //    com os dados que estavam dentro do token (id, email).
-    const userId = req.user.id;
-
     const client = await pool.connect();
     try {
-      // 3. Buscamos o usuário no banco usando o ID do token
-      const result = await client.query('SELECT id, name, email, created_at FROM users WHERE id = $1', [userId]);
+      // Insere o novo registro de progresso
+      const result = await client.query(
+        'INSERT INTO progress (user_id, lesson_id) VALUES ($1, $2) RETURNING id',
+        [userId, lesson_id]
+      );
+      
+      res.status(201).json({ 
+        message: 'Progresso salvo com sucesso!', 
+        progressId: result.rows[0].id 
+      });
 
-      if (result.rows.length === 0) {
-        return res.status(404).json({ message: 'Usuário não encontrado.' });
+    } catch (dbError) {
+      // 500: Erro geral do servidor
+      let statusCode = 500;
+      let errorMessage = 'Erro ao salvar progresso.';
+
+      // 23505 é o código de erro do PostgreSQL para "violão de restrição UNIQUE"
+      // (a que criamos: user_lesson_unique)
+      if (dbError.code === '23505') {
+        statusCode = 409; // 409 = Conflict
+        errorMessage = 'Este progresso já foi salvo anteriormente.';
+      } else {
+        console.error('Erro no banco de dados:', dbError);
       }
+      
+      res.status(statusCode).json({ message: errorMessage });
+    } finally {
+      client.release();
+    }
+    
+  } catch (error) {
+    console.error('Erro geral no servidor:', error);
+    res.status(500).json({ message: 'Erro no servidor' });
+  }
+});
+app.get('/progress', authMiddleware, async (req, res) => {
+  // O authMiddleware nos dá o 'req.user' com o ID do usuário logado
+  const userId = req.user.id;
 
-      // 4. Retornamos os dados do usuário (sem a senha!)
-      res.status(200).json(result.rows[0]);
+  console.log(`Usuário (ID: ${userId}) está buscando seu progresso.`);
+
+  try {
+    const client = await pool.connect();
+    try {
+      // Busca todos os registros de progresso para este usuário
+      const result = await client.query(
+        'SELECT * FROM progress WHERE user_id = $1',
+        [userId]
+      );
+      
+      // Retorna a lista de registros de progresso como um JSON
+      // O app Flutter usará isso para ver quais 'lesson_id's já foram completados
+      res.status(200).json(result.rows);
 
     } catch (dbError) {
       console.error('Erro no banco de dados:', dbError);
-      res.status(500).json({ message: 'Erro ao buscar usuário.' });
+      res.status(500).json({ message: 'Erro ao buscar progresso.' });
     } finally {
       client.release();
     }
@@ -63,6 +109,78 @@ app.get('/users/me', authMiddleware, async (req, res) => {
   }
 });
 
+// --- Rotas da API ---
+
+/**
+ * Rota de Teste (GET /)
+ * Verifica se a API está online.
+ */
+app.get('/', (req, res) => {
+  res.send('A API de Usuários (Node.js) do Sinaliza está funcionando!');
+});
+
+/**
+ * Rota Protegida (GET /users/me)
+ * Busca os dados do usuário logado.
+ */
+app.get('/users/me', authMiddleware, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const client = await pool.connect();
+    try {
+      const result = await client.query('SELECT id, name, email, created_at FROM users WHERE id = $1', [userId]);
+      if (result.rows.length === 0) {
+        return res.status(404).json({ message: 'Usuário não encontrado.' });
+      }
+      res.status(200).json(result.rows[0]);
+    } catch (dbError) {
+      console.error('Erro no banco de dados:', dbError);
+      res.status(500).json({ message: 'Erro ao buscar usuário.' });
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error('Erro geral no servidor:', error);
+    res.status(500).json({ message: 'Erro no servidor' });
+  }
+});
+
+/**
+ * ==================================================================
+ * Rota Protegida (GET /lessons) - O NOVO CÓDIGO DO PASSO 2
+ * Busca todas as lições cadastradas no banco de dados.
+ * ==================================================================
+ */
+app.get('/lessons', authMiddleware, async (req, res) => {
+  // O authMiddleware já validou o token e nos deu o req.user
+  console.log(`Usuário (ID: ${req.user.id}) está buscando as lições.`);
+
+  try {
+    const client = await pool.connect();
+    try {
+      // Busca todas as lições, ordenadas pelo ID
+      const result = await client.query('SELECT * FROM lessons ORDER BY id ASC');
+      
+      // Retorna a lista de lições como um JSON
+      res.status(200).json(result.rows);
+
+    } catch (dbError) {
+      console.error('Erro no banco de dados:', dbError);
+      res.status(500).json({ message: 'Erro ao buscar lições.' });
+    } finally {
+      client.release();
+    }
+    
+  } catch (error) {
+    console.error('Erro geral no servidor:', error);
+    res.status(500).json({ message: 'Erro no servidor' });
+  }
+});
+
+/**
+ * Rota de Cadastro de Usuário (POST /users/register)
+ * Recebe nome, email e senha, salva no banco.
+ */
 app.post('/users/register', async (req, res) => {
   try {
     const { name, email, password } = req.body;
