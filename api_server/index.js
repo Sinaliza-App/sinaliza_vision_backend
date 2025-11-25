@@ -27,54 +27,53 @@ app.use(cors()); // Permite que o Flutter acesse a API
 app.use(express.json()); // Permite que o servidor leia JSON no corpo das requisições
 
 app.post('/progress', authMiddleware, async (req, res) => {
-  // O authMiddleware nos dá o 'req.user' com o ID do usuário logado
   const userId = req.user.id;
-  
-  // O Flutter deve enviar o ID da lição no corpo da requisição
-  const { lesson_id } = req.body;
+  const { lesson_id, score } = req.body;
 
+  // 1. Validação
   if (!lesson_id) {
-    return res.status(400).json({ message: 'O ID da lição (lesson_id) é obrigatório.' });
+    return res.status(400).json({ message: 'O ID da lição é obrigatório.' });
   }
 
-  console.log(`Usuário (ID: ${userId}) está salvando progresso para a lição (ID: ${lesson_id}).`);
+  const finalScore = score || 10;
+  let client; // Definimos o cliente fora para poder liberar no finally
 
   try {
-    const client = await pool.connect();
-    try {
-      // Insere o novo registro de progresso
-      const result = await client.query(
-        'INSERT INTO progress (user_id, lesson_id) VALUES ($1, $2) RETURNING id',
-        [userId, lesson_id]
-      );
-      
-      res.status(201).json({ 
-        message: 'Progresso salvo com sucesso!', 
-        progressId: result.rows[0].id 
-      });
+    client = await pool.connect();
+    
+    // 2. Tenta salvar
+    const result = await client.query(
+      'INSERT INTO progress (user_id, lesson_id, score) VALUES ($1, $2, $3) RETURNING id',
+      [userId, lesson_id, finalScore]
+    );
+    
+    // 3. Sucesso! (Use 'return' para parar a execução aqui)
+    return res.status(201).json({ 
+      message: `Progresso salvo! Você ganhou ${finalScore} pontos!`, 
+      progressId: result.rows[0].id 
+    });
 
-    } catch (dbError) {
-      // 500: Erro geral do servidor
-      let statusCode = 500;
-      let errorMessage = 'Erro ao salvar progresso.';
+  } catch (error) {
+    // 4. Tratamento de Erros
+    
+    // Verifica se é erro de duplicidade (código 23505 do Postgres)
+    if (error.code === '23505') {
+      return res.status(409).json({ message: 'Este progresso já foi salvo anteriormente.' });
+    }
 
-      // 23505 é o código de erro do PostgreSQL para "violão de restrição UNIQUE"
-      // (a que criamos: user_lesson_unique)
-      if (dbError.code === '23505') {
-        statusCode = 409; // 409 = Conflict
-        errorMessage = 'Este progresso já foi salvo anteriormente.';
-      } else {
-        console.error('Erro no banco de dados:', dbError);
-      }
-      
-      res.status(statusCode).json({ message: errorMessage });
-    } finally {
+    // Outros erros
+    console.error('Erro na rota /progress:', error);
+    
+    // Só envia erro 500 se nenhuma resposta foi enviada ainda
+    if (!res.headersSent) {
+      return res.status(500).json({ message: 'Erro ao salvar progresso.' });
+    }
+
+  } finally {
+    // 5. Sempre libera a conexão com o banco
+    if (client) {
       client.release();
     }
-    
-  } catch (error) {
-    console.error('Erro geral no servidor:', error);
-    res.status(500).json({ message: 'Erro no servidor' });
   }
 });
 app.get('/progress', authMiddleware, async (req, res) => {
@@ -128,17 +127,37 @@ app.get('/users/me', authMiddleware, async (req, res) => {
     const userId = req.user.id;
     const client = await pool.connect();
     try {
-      const result = await client.query('SELECT id, name, email, created_at FROM users WHERE id = $1', [userId]);
+      // Query atualizada: Faz um JOIN com a tabela progress e SOMA os pontos
+      const result = await client.query(`
+        SELECT 
+          u.id, 
+          u.name, 
+          u.email, 
+          u.created_at,
+          COALESCE(SUM(p.score), 0) as total_score
+        FROM users u
+        LEFT JOIN progress p ON u.id = p.user_id
+        WHERE u.id = $1
+        GROUP BY u.id, u.name, u.email, u.created_at
+      `, [userId]);
+
       if (result.rows.length === 0) {
         return res.status(404).json({ message: 'Usuário não encontrado.' });
       }
-      res.status(200).json(result.rows[0]);
+
+      // O PostgreSQL pode retornar SUM como string, garantimos que seja número
+      const user = result.rows[0];
+      user.total_score = parseInt(user.total_score);
+
+      res.status(200).json(user);
+
     } catch (dbError) {
       console.error('Erro no banco de dados:', dbError);
       res.status(500).json({ message: 'Erro ao buscar usuário.' });
     } finally {
       client.release();
     }
+    
   } catch (error) {
     console.error('Erro geral no servidor:', error);
     res.status(500).json({ message: 'Erro no servidor' });
