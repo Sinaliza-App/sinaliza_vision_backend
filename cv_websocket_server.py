@@ -1,6 +1,6 @@
 """
-Servidor WebSocket para o Sinaliza App
-Atualizado para usar o novo modelo YOLO (runs_novo/libras_fsl/weights/best.pt)
+Servidor WebSocket para o Sinaliza App (Versão Final)
+Integra o modelo YOLO v8 com comunicação em tempo real para o Flutter.
 """
 
 import asyncio
@@ -11,6 +11,7 @@ import numpy as np
 import json
 import base64
 from collections import deque, Counter
+from datetime import datetime
 
 # Tenta importar o YOLO
 try:
@@ -21,60 +22,68 @@ except ImportError:
     exit(1)
 
 # ============================
-# 🔧 CONFIGURAÇÕES
+# 🔧 CONFIGURAÇÕES GERAIS
 # ============================
-# Atualize este caminho se necessário, baseando-se na pasta onde o script roda
+# Caminho exato que você me mostrou na imagem
 MODEL_PATH = "runs_novo/libras_fsl/weights/best.pt" 
-CONFIDENCE = 0.60
+CONFIDENCE = 0.60  # Confiança mínima para considerar um acerto
+PORTA_SERVIDOR = 8080
 
 class DetectorLibras:
-    """Classe adaptadora para usar o YOLO no servidor."""
+    """Classe responsável por carregar o modelo e fazer a inferência."""
     
     def __init__(self):
+        # Define o diretório base (onde este script está)
         base_dir = os.path.dirname(os.path.abspath(__file__))
-        # Tenta encontrar o modelo no caminho absoluto ou relativo
+        
+        # Monta o caminho absoluto do modelo
         self.path_modelo = os.path.join(base_dir, MODEL_PATH)
         
-        if not os.path.exists(self.path_modelo):
-            # Fallback: tenta procurar na raiz se a pasta runs_novo estiver lá
-            self.path_modelo = os.path.abspath(MODEL_PATH)
-
         self.modelo = None
         self.carregado = False
         
-        # Histórico para suavizar o resultado (evitar que a letra fique piscando)
+        # Histórico para suavizar o resultado (evita que a letra fique "piscando")
+        # Guarda as últimas 10 detecções para fazer uma média/votação
         self.historico_deteccoes = deque(maxlen=10)
         
         self.carregar_modelo()
     
     def carregar_modelo(self):
         try:
-            print(f"📦 Carregando modelo YOLO: {self.path_modelo}")
+            print(f"\n📦 Carregando modelo YOLO...")
+            print(f"   -> Caminho: {self.path_modelo}")
+            
             if not os.path.exists(self.path_modelo):
-                print(f"❌ ARQUIVO DE MODELO NÃO ENCONTRADO EM: {self.path_modelo}")
-                print("Verifique se a pasta 'runs_novo' está junto com este script.")
+                print(f"❌ ERRO CRÍTICO: Arquivo de modelo não encontrado!")
+                print(f"   Verifique se a pasta 'runs_novo' está no mesmo local que este script.")
                 self.carregado = False
                 return
 
             self.modelo = YOLO(self.path_modelo)
             self.carregado = True
-            print(f"✓ Modelo carregado! Classes: {list(self.modelo.names.values())}")
+            
+            # Pega os nomes das classes (letras) que o modelo conhece
+            classes = list(self.modelo.names.values())
+            print(f"✅ Modelo carregado com sucesso!")
+            print(f"   -> Classes detectáveis: {classes}\n")
+            
         except Exception as e:
             print(f"❌ Erro ao carregar modelo: {e}")
             self.carregado = False
     
     def processar_imagem(self, image):
-        """Recebe imagem do OpenCV, faz predição e retorna o melhor resultado."""
+        """Recebe uma imagem (array numpy), passa pelo YOLO e retorna o resultado."""
         if not self.carregado:
             return None, 0.0
 
-        # Inferência YOLO
+        # Faz a predição usando o YOLO
+        # verbose=False evita encher o terminal de logs
         results = self.modelo.predict(image, conf=CONFIDENCE, verbose=False)
         
         melhor_resultado = None
         maior_confianca = 0.0
 
-        # Processar resultados
+        # O YOLO pode detectar vários objetos. Pegamos o com maior confiança.
         for result in results:
             for box in result.boxes:
                 conf = float(box.conf[0])
@@ -88,93 +97,131 @@ class DetectorLibras:
         return melhor_resultado, maior_confianca
 
     def obter_gesto_suavizado(self, gesto_atual, confianca):
-        """Usa estatística para evitar 'flicks' (mudanças bruscas) na detecção."""
+        """
+        Usa estatística para estabilizar a detecção.
+        Só confirma o gesto se ele aparecer na maioria dos últimos frames.
+        """
         if gesto_atual:
             self.historico_deteccoes.append(gesto_atual)
+        else:
+            # Se não detectou nada, adiciona 'None' ao histórico para diluir erros
+            self.historico_deteccoes.append(None)
         
+        # Precisa de um mínimo de dados para começar
         if len(self.historico_deteccoes) < 3:
             return None, 0.0
             
-        # Pega o gesto mais comum nos últimos frames
+        # Conta qual gesto apareceu mais vezes nas últimas 10 tentativas
         contador = Counter(self.historico_deteccoes)
+        # Remove os 'None' da contagem para focar nos gestos reais
+        if None in contador:
+            del contador[None]
+            
+        if not contador:
+            return None, 0.0
+
         gesto_comum, frequencia = contador.most_common(1)[0]
         
-        # Se o gesto aparece na maioria dos frames recentes, confirma ele
+        # Regra de Ouro: O gesto precisa aparecer em 50% dos quadros recentes
+        # Isso evita "falsos positivos" rápidos que piscam na tela.
         if frequencia / len(self.historico_deteccoes) >= 0.5:
             return gesto_comum, confianca
             
         return None, 0.0
 
 # ===================================================================
-# SERVIDOR WEBSOCKET
+# SERVIDOR WEBSOCKET (Lógica de Conexão)
 # ===================================================================
 
 detector: DetectorLibras = None
 
 async def handler(websocket):
-    print(f"📱 Cliente Flutter conectado: {websocket.remote_address}")
+    """Gerencia a conexão com o App Flutter."""
+    print(f"📱 Cliente conectado: {websocket.remote_address}")
+    
     try:
         async for message in websocket:
-            # 1. Receber JSON do Flutter
-            data = json.loads(message)
+            # 1. Recebe o JSON com a imagem Base64 do Flutter
+            try:
+                data = json.loads(message)
+                img_base64 = data['image']
+                height = data['height']
+                width = data['width']
+                stride = data['stride']
+            except KeyError:
+                print("⚠ Erro: JSON recebido com formato inválido.")
+                continue
             
-            # 2. Decodificar imagem Base64
-            img_bytes = base64.b64decode(data['image'])
-            height = data['height']
-            width = data['width']
-            stride = data['stride']
-
-            # 3. Reconstruir imagem para OpenCV
+            # 2. Decodifica a imagem (Base64 -> Bytes -> Numpy Array)
+            img_bytes = base64.b64decode(img_base64)
+            
+            # O Flutter envia YUV420. O canal Y (Luminância) é a imagem em escala de cinza.
+            # É suficiente e mais rápido reconstruir apenas ele.
             img_gray = np.frombuffer(img_bytes, dtype=np.uint8).reshape((height, stride))
-            img_gray = img_gray[:, :width] # Remover padding
+            
+            # Remove o padding (bytes extras que o Android adiciona nas bordas)
+            img_gray = img_gray[:, :width]
+
+            # O YOLO precisa de 3 canais (RGB/BGR). Convertemos o cinza para BGR.
             img_bgr = cv2.cvtColor(img_gray, cv2.COLOR_GRAY2BGR)
             
-            # --- ROTAÇÃO (Mantenha se necessário para sua câmera) ---
-            # img_bgr = cv2.rotate(img_bgr, cv2.ROTATE_90_CLOCKWISE) 
-            # -------------------------------------------------------
-
-            # 4. Detecção
+            # -----------------------------------------------------------
+            # 🔄 CORREÇÃO DE ROTAÇÃO (CRUCIAL)
+            # A câmera do Flutter chega "deitada". Giramos 90º horário.
+            # -----------------------------------------------------------
+            img_bgr = cv2.rotate(img_bgr, cv2.ROTATE_90_CLOCKWISE) 
+            
+            # 3. Detecta o gesto
             gesto_detectado, confianca = detector.processar_imagem(img_bgr)
             
-            # 5. Suavização (Para a UI do app ficar estável)
+            # 4. Suaviza o resultado (tira a tremedeira)
             gesto_final, conf_final = detector.obter_gesto_suavizado(gesto_detectado, confianca)
 
-            # 6. Resposta
+            # 5. Prepara a resposta
             if gesto_final:
                 response = {
                     "gesto": gesto_final,
                     "confianca": float(conf_final)
                 }
+                # Log simples no terminal para você acompanhar
+                print(f"🤟 Detectado: {gesto_final} ({conf_final:.2f})", end='\r')
             else:
                 response = {
                     "gesto": "Nenhum",
                     "confianca": 0.0
                 }
             
+            # 6. Envia de volta para o Flutter
             await websocket.send(json.dumps(response))
             
     except websockets.exceptions.ConnectionClosed:
-        print(f"Cliente desconectado.")
+        print(f"\n🔌 Cliente desconectado: {websocket.remote_address}")
     except Exception as e:
-        print(f"Erro: {e}")
+        print(f"\n❌ Erro na conexão: {e}")
 
 async def main():
     global detector
     print("\n" + "="*60)
-    print("🚀 INICIANDO SERVIDOR SINALIZA (NOVO MODELO)")
+    print("🚀 SERVIDOR SINALIZA - VISÃO COMPUTACIONAL")
     print("="*60)
     
+    # Inicializa o detector
     detector = DetectorLibras()
     
     if not detector.carregado:
+        print("Encerrando servidor por falta de modelo.")
         return
 
-    async with websockets.serve(handler, "0.0.0.0", 8080):
-        print(f"📡 Ouvindo na porta 8080...")
-        print(f"🎯 Modelo: {MODEL_PATH}")
-        print(f"🎚️  Confiança Mínima: {CONFIDENCE}")
-        print("="*60 + "\n")
-        await asyncio.Future()
+    # Inicia o servidor
+    # '0.0.0.0' permite conexões externas (Radmin VPN, Wi-Fi, etc.)
+    print(f"📡 Aguardando conexões do Flutter na porta {PORTA_SERVIDOR}...")
+    print("="*60 + "\n")
+    
+    async with websockets.serve(handler, "0.0.0.0", PORTA_SERVIDOR):
+        await asyncio.Future()  # Mantém o script rodando para sempre
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\n🛑 Servidor encerrado pelo usuário.")
