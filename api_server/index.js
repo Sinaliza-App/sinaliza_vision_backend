@@ -14,11 +14,11 @@ const port = 3000;
 
 // --- Configuração do Banco de Dados ---
 const pool = new Pool({
-  user: 'postgres',
-  host: '127.0.0.1', // Usando 127.0.0.1 que resolveu o erro 'InitPostgres'
-  database: 'sinaliza_db',
-  password: 'Sinaliza282006#', // Sua senha confirmada
-  port: 5432,
+  user: process.env.DB_USER, // Seu usuário do banco
+  host: process.env.DB_HOST, // Usando 127.0.0.1 que resolveu o erro 'InitPostgres'
+  database: process.env.DB_NAME, // Seu banco de dados
+  password: process.env.DB_PASSWORD, // Sua senha confirmada
+  port: process.env.DB_PORT,
 });
 
 // --- Middlewares Essenciais ---
