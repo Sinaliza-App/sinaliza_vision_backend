@@ -209,6 +209,10 @@ app.post('/users/register', async (req, res) => {
     if (!name || !email || !password) {
       return res.status(400).json({ message: 'Nome, e-mail e senha são obrigatórios.' });
     }
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({ message: 'Por favor, insira um e-mail válido (ex: nome@email.com).' });
+    }
 
     // Aqui você pode adicionar a validação de senha forte se quiser
 
