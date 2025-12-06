@@ -169,7 +169,10 @@ async def handler(websocket):
             # 🔄 CORREÇÃO DE ROTAÇÃO (CRUCIAL)
             # A câmera do Flutter chega "deitada". Giramos 90º horário.
             # -----------------------------------------------------------
-            img_bgr = cv2.rotate(img_bgr, cv2.ROTATE_90_CLOCKWISE) 
+            # Tente esta rotação (Anti-horário)
+            img_bgr = cv2.rotate(img_bgr, cv2.ROTATE_90_COUNTERCLOCKWISE)
+            img_espelhada_v = cv2.flip(img_bgr, 0)
+
             
             # 3. Detecta o gesto
             gesto_detectado, confianca = detector.processar_imagem(img_bgr)
