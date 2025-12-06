@@ -14,10 +14,10 @@ const port = 3000;
 
 // --- Configuração do Banco de Dados ---
 const pool = new Pool({
-  user: 'postgres',
-  host: '127.0.0.1', // Usando 127.0.0.1 que resolveu o erro 'InitPostgres'
-  database: 'sinaliza_db',
-  password: 'Sinaliza282006#', // Sua senha confirmada
+  user: process.env.DB_USER, // Seu usuário do banco
+  host: process.env.DB_HOST, // Usando 127.0.0.1 que resolveu o erro 'InitPostgres'
+  database: process.env.DB_DATABASE, // Seu nome do banco
+  password: process.env.DB_PASSWORD, // Sua senha confirmada
   port: 5432,
 });
 
@@ -315,7 +315,35 @@ app.post('/users/login', async (req, res) => {
     res.status(500).json({ message: 'Erro no servidor' });
   }
 });
+// --- DEBUG: TESTE DE CONEXÃO AO INICIAR ---
+(async () => {
+  try {
+    const client = await pool.connect();
+    console.log("---------------------------------------------------------");
+    
+    // 1. Qual banco estou usando?
+    const dbRes = await client.query('SELECT current_database()');
+    console.log(`🔌 Conectado no banco: [ ${dbRes.rows[0].current_database} ]`);
 
+    // 2. Quais tabelas existem aqui?
+    const tablesRes = await client.query(`
+      SELECT table_name 
+      FROM information_schema.tables 
+      WHERE table_schema = 'public'
+    `);
+    
+    const tables = tablesRes.rows.map(row => row.table_name);
+    console.log(`📋 Tabelas encontradas: ${tables.length > 0 ? tables.join(', ') : 'NENHUMA (Banco Vazio!)'}`);
+    console.log("---------------------------------------------------------");
+    
+    client.release();
+  } catch (err) {
+    console.error('❌ Erro fatal ao conectar no banco:', err.message);
+  }
+})();
+// ------------------------------------------
+
+// app.listen ...
 // --- Iniciar o Servidor ---
 app.listen(port, () => {
   console.log(`Servidor Node.js rodando na porta http://localhost:${port}`);
