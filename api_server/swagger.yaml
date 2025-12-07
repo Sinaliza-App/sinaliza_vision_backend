@@ -1,11 +1,15 @@
 openapi: 3.0.0
 info:
-  title: Sinaliza API 🤟
-  description: API oficial do aplicativo Sinaliza para ensino de Libras gamificado.
+  title: Sinaliza API
+  description: API para o aplicativo de ensino de Libras gamificado (Sinaliza).
   version: 1.0.0
+
 servers:
   - url: http://localhost:3000
     description: Servidor Local
+  # Se quiser adicionar o IP da rede para facilitar testes no Swagger:
+  # - url: http://192.168.0.X:3000 
+  #   description: Rede Wi-Fi
 
 components:
   securitySchemes:
@@ -17,55 +21,105 @@ components:
 security:
   - bearerAuth: []
 
+tags:
+  - name: Autenticação
+    description: Registro e Login de usuários
+  - name: Usuário
+    description: Gerenciamento de perfil e conta
+  - name: Conteúdo
+    description: Módulos e Lições de Libras
+  - name: Gamificação
+    description: Progresso, Pontuação e Ranking
+
 paths:
+  # --- ROTA DE TESTE ---
+  /:
+    get:
+      summary: Verifica se a API está online
+      security: [] # Esta rota é pública
+      tags: [Geral]
+      responses:
+        200:
+          description: API Online
+
+  # --- AUTENTICAÇÃO ---
   /users/register:
     post:
-      summary: Criar nova conta
-      security: [] # Pública (não precisa de token)
+      summary: Cadastrar novo usuário
       tags: [Autenticação]
+      security: [] # Pública
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              required:
+                - name
+                - email
+                - password
               properties:
-                name: { type: string }
-                email: { type: string }
-                password: { type: string }
+                name:
+                  type: string
+                email:
+                  type: string
+                password:
+                  type: string
       responses:
         201:
           description: Usuário criado com sucesso
+        400:
+          description: Dados inválidos
         409:
           description: E-mail ou nome já existem
 
   /users/login:
     post:
-      summary: Fazer Login
-      security: [] # Pública
+      summary: Fazer login
       tags: [Autenticação]
+      security: [] # Pública
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              required:
+                - email
+                - password
               properties:
-                email: { type: string }
-                password: { type: string }
+                email:
+                  type: string
+                password:
+                  type: string
       responses:
         200:
-          description: Login realizado (Retorna o Token)
+          description: Login realizado com sucesso (Retorna Token)
         401:
           description: Credenciais inválidas
 
+  # --- USUÁRIO (CRUD) ---
   /users/me:
     get:
-      summary: Obter perfil do usuário
+      summary: Obter dados do usuário logado (Perfil + XP Total)
       tags: [Usuário]
       responses:
         200:
-          description: Dados do usuário
+          description: Dados do perfil
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: integer
+                  name:
+                    type: string
+                  email:
+                    type: string
+                  total_score:
+                    type: integer
+                    description: Soma de todo XP ganho
     put:
       summary: Atualizar perfil (Nome ou Senha)
       tags: [Usuário]
@@ -75,59 +129,127 @@ paths:
             schema:
               type: object
               properties:
-                name: { type: string }
-                password: { type: string }
+                name: 
+                  type: string
+                  description: Novo nome (opcional)
+                password: 
+                  type: string
+                  description: Nova senha (opcional)
       responses:
         200:
-          description: Atualizado com sucesso
+          description: Dados atualizados com sucesso
+        409:
+          description: Nome de usuário já existe
     delete:
       summary: Excluir conta permanentemente
       tags: [Usuário]
       responses:
         200:
-          description: Conta excluída
+          description: Conta excluída com sucesso
 
+  # --- CONTEÚDO ---
   /modules:
     get:
       summary: Listar todos os módulos
+      description: Retorna os módulos com o progresso (total de lições vs completas)
       tags: [Conteúdo]
       responses:
         200:
-          description: Lista de módulos disponíveis
+          description: Lista de módulos
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: integer
+                    title:
+                      type: string
+                    icon_name:
+                      type: string
+                    total_lessons:
+                      type: integer
+                    completed_lessons:
+                      type: integer
 
   /lessons:
     get:
-      summary: Listar lições
+      summary: Listar lições de um módulo
       tags: [Conteúdo]
       parameters:
         - in: query
           name: module_id
           schema:
             type: integer
-          description: Filtrar por ID do módulo
+          required: true
+          description: ID do módulo para filtrar
       responses:
         200:
           description: Lista de lições
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: integer
+                    title:
+                      type: string
+                    example_image_url:
+                      type: string
 
+  # --- GAMIFICAÇÃO ---
   /progress:
+    get:
+      summary: Listar histórico de progresso do usuário
+      tags: [Gamificação]
+      responses:
+        200:
+          description: Lista de progressos
     post:
-      summary: Salvar progresso (Concluir lição)
-      tags: [Progresso]
+      summary: Salvar progresso (Lição Concluída)
+      tags: [Gamificação]
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              required:
+                - lesson_id
               properties:
-                lesson_id: { type: integer }
-                score: { type: integer }
+                lesson_id:
+                  type: integer
+                score:
+                  type: integer
+                  default: 10
       responses:
         201:
-          description: Progresso salvo e XP ganho
+          description: Progresso salvo (+XP)
+        409:
+          description: Esta lição já foi completada antes
+
+  /ranking:
     get:
-      summary: Listar lições concluídas
-      tags: [Progresso]
+      summary: Retorna o ranking global (Top 50)
+      tags: [Gamificação]
       responses:
         200:
-          description: Lista de IDs concluídos
+          description: Lista ordenada dos melhores alunos por XP
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    name:
+                      type: string
+                      example: "Emanuel"
+                    total_score:
+                      type: integer
+                      example: 1200

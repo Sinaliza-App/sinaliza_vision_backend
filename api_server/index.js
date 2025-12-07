@@ -210,6 +210,34 @@ app.post('/progress', authMiddleware, async (req, res) => {
   }
 });
 
+// --- Rota de Ranking ---
+app.get('/ranking', authMiddleware, async (req, res) => {
+  try {
+    const client = await pool.connect();
+    try {
+      // Pega os top 50 usuários ordenados por XP (do maior para o menor)
+      const result = await client.query(`
+        SELECT 
+          u.name, 
+          COALESCE(SUM(p.score), 0)::int as total_score
+        FROM users u
+        LEFT JOIN progress p ON u.id = p.user_id
+        GROUP BY u.id, u.name
+        ORDER BY total_score DESC
+        LIMIT 50
+      `);
+
+      res.status(200).json(result.rows);
+
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error('Erro no ranking:', error);
+    res.status(500).json({ message: 'Erro ao buscar ranking.' });
+  }
+});
+
 // --- Rota de Cadastro ---
 app.post('/users/register', async (req, res) => {
   try {
