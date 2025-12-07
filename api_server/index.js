@@ -7,11 +7,17 @@ const bcrypt = require('bcryptjs'); // Para hashear senhas
 const jwt = require('jsonwebtoken'); // Para gerar tokens de login
 const authMiddleware = require('./authMiddleware'); // Nosso "segurança"
 const { Pool } = require('pg'); // Para o PostgreSQL
+// --- 1. IMPORTAR O SWAGGER ---
+const swaggerUi = require('swagger-ui-express');
+const YAML = require('yamljs');
+// -----------------------------
 
-// --- Configuração da Aplicação ---
 const app = express();
 const port = 3000;
 
+// --- 2. CARREGAR O ARQUIVO YAML ---
+const swaggerDocument = YAML.load('./swagger.yaml');
+// ----------------------------------
 // --- Configuração do Banco de Dados ---
 const pool = new Pool({
   user: process.env.DB_USER, // Seu usuário do banco
@@ -25,10 +31,13 @@ const pool = new Pool({
 app.use(cors()); // Permite que o Flutter acesse a API
 app.use(express.json()); // Permite que o servidor leia JSON no corpo das requisições
 
+// --- 3. CONFIGURAR ROTA DO SWAGGER ---
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 // --- Rotas da API ---
 
+
 app.get('/', (req, res) => {
-  res.send('A API de Usuários (Node.js) do Sinaliza está funcionando!');
+  res.send('API Sinaliza está online! Acesse /api-docs para documentação.');
 });
 
 // --- NOVA ROTA: LISTAR MÓDULOS ---
@@ -317,6 +326,78 @@ app.post('/users/login', async (req, res) => {
   } catch (error) {
     console.error('Erro geral no servidor:', error);
     res.status(500).json({ message: 'Erro no servidor' });
+  }
+});
+
+app.put('/users/me', authMiddleware, async (req, res) => {
+  const userId = req.user.id;
+  const { name, password } = req.body;
+
+  try {
+    const client = await pool.connect();
+    try {
+      // Monta a query dinamicamente (só atualiza o que foi enviado)
+      let fields = [];
+      let values = [];
+      let paramCount = 1;
+
+      if (name) {
+        fields.push(`name = $${paramCount}`);
+        values.push(name);
+        paramCount++;
+      }
+
+      if (password) {
+        // Se mandou senha, criptografa antes
+        const salt = await bcrypt.genSalt(10);
+        const passwordHash = await bcrypt.hash(password, salt);
+        fields.push(`password_hash = $${paramCount}`);
+        values.push(passwordHash);
+        paramCount++;
+      }
+
+      if (fields.length === 0) {
+        return res.status(400).json({ message: 'Nenhum dado para atualizar.' });
+      }
+
+      // Adiciona o ID no final dos valores
+      values.push(userId);
+      
+      const query = `UPDATE users SET ${fields.join(', ')} WHERE id = $${paramCount}`;
+      
+      await client.query(query, values);
+      
+      res.status(200).json({ message: 'Dados atualizados com sucesso!' });
+
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error('Erro ao atualizar:', error);
+    if (error.code === '23505') {
+        return res.status(409).json({ message: 'Este nome já está em uso.' });
+    }
+    res.status(500).json({ message: 'Erro no servidor.' });
+  }
+});
+
+app.delete('/users/me', authMiddleware, async (req, res) => {
+  const userId = req.user.id;
+
+  try {
+    const client = await pool.connect();
+    try {
+      // Como configuramos o banco com CASCADE, apagar o user apaga o progresso junto
+      await client.query('DELETE FROM users WHERE id = $1', [userId]);
+      
+      res.status(200).json({ message: 'Conta excluída com sucesso. Adeus!' });
+
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error('Erro ao excluir:', error);
+    res.status(500).json({ message: 'Erro no servidor.' });
   }
 });
 // --- DEBUG: TESTE DE CONEXÃO AO INICIAR ---

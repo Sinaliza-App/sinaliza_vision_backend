@@ -1,0 +1,133 @@
+openapi: 3.0.0
+info:
+  title: Sinaliza API 🤟
+  description: API oficial do aplicativo Sinaliza para ensino de Libras gamificado.
+  version: 1.0.0
+servers:
+  - url: http://localhost:3000
+    description: Servidor Local
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+security:
+  - bearerAuth: []
+
+paths:
+  /users/register:
+    post:
+      summary: Criar nova conta
+      security: [] # Pública (não precisa de token)
+      tags: [Autenticação]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                email: { type: string }
+                password: { type: string }
+      responses:
+        201:
+          description: Usuário criado com sucesso
+        409:
+          description: E-mail ou nome já existem
+
+  /users/login:
+    post:
+      summary: Fazer Login
+      security: [] # Pública
+      tags: [Autenticação]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email: { type: string }
+                password: { type: string }
+      responses:
+        200:
+          description: Login realizado (Retorna o Token)
+        401:
+          description: Credenciais inválidas
+
+  /users/me:
+    get:
+      summary: Obter perfil do usuário
+      tags: [Usuário]
+      responses:
+        200:
+          description: Dados do usuário
+    put:
+      summary: Atualizar perfil (Nome ou Senha)
+      tags: [Usuário]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                password: { type: string }
+      responses:
+        200:
+          description: Atualizado com sucesso
+    delete:
+      summary: Excluir conta permanentemente
+      tags: [Usuário]
+      responses:
+        200:
+          description: Conta excluída
+
+  /modules:
+    get:
+      summary: Listar todos os módulos
+      tags: [Conteúdo]
+      responses:
+        200:
+          description: Lista de módulos disponíveis
+
+  /lessons:
+    get:
+      summary: Listar lições
+      tags: [Conteúdo]
+      parameters:
+        - in: query
+          name: module_id
+          schema:
+            type: integer
+          description: Filtrar por ID do módulo
+      responses:
+        200:
+          description: Lista de lições
+
+  /progress:
+    post:
+      summary: Salvar progresso (Concluir lição)
+      tags: [Progresso]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                lesson_id: { type: integer }
+                score: { type: integer }
+      responses:
+        201:
+          description: Progresso salvo e XP ganho
+    get:
+      summary: Listar lições concluídas
+      tags: [Progresso]
+      responses:
+        200:
+          description: Lista de IDs concluídos
