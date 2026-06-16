@@ -1,0 +1,29 @@
+sinaliza_app_ai/
+│
+├── dataset/
+│   ├── bom_dia/
+│   │   ├── video_0_frame_0.npy
+│   │   ├── video_0_frame_1.npy
+│   │   └── ... (até o frame 29)
+│   │   ├── video_1_frame_0.npy
+│   │   └── ...
+│   │
+│   ├── boa_tarde/
+│   │   ├── video_0_frame_0.npy
+│   │   └── ...
+│   │
+│   ├── comer/
+│   │   ├── video_0_frame_0.npy
+│   │   └── ...
+│   │
+│   ├── beber/
+│   │   ├── video_0_frame_0.npy
+│   │   └── ...
+│   │
+│   └── ajuda/
+│       ├── video_0_frame_0.npy
+│       └── ...
+│
+├── treinar_modelo.py
+├── servidor_websocket.py
+└── modelo_libras.h5

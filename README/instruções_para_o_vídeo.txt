@@ -1,0 +1,47 @@
+===================================================================
+ INSTRUÇÕES DE GRAVAÇÃO - DATASET SINALIZA APP (PIEC 2)
+===================================================================
+
+Fala pessoal! Para rodar o nosso modelo de IA temporal para o PIEC 2, precisamos 
+coletar amostras dos sinais de LIBRAS de pessoas diferentes. Isso vai garantir nossa nota para
+passar na disciplina! 
+
+Por favor, rodem o script 'coletar_dados.py' e sigam as regras abaixo para as gravações:
+
+1. OS SINAIS QUE VAMOS GRAVAR:
+O script vai passar automaticamente por 5 sinais, fazendo 30 tentativas de cada um:
+  * bom_dia
+  * boa_tarde
+  * comer
+  * beber
+  * ajuda
+
+2. COMO SE POSICIONAR NA WEBCAM:
+  * Distância: Fique a uma distância onde a câmera consiga focar do seu ROSTO até o seu 
+  UMBIGO/CINTURA. Muitos sinais usam o espaço em frente ao peito, então os braços e tronco 
+  precisam estar visíveis.
+  * Iluminação: Evite ficar de costas para janelas ou lâmpadas fortes
+(isso cria sombra e a IA não enxerga seus dedos). A luz deve bater de frente em você.
+
+3. O FLUXO DO SCRIPT (COMO GRAVAR):
+O script alterna entre dois estados na tela:
+  * Texto Amarelo ("PREPARE-SE"): O contador vai rodar na tela por 1 segundo. Use esse tempo para
+   respirar e posicionar suas mãos no início do sinal.
+  * Texto Vermelho ("GRAVANDO"): O script vai capturar exatamente 30 frames bem rápido 
+  (cerca de 1 segundo). Faça o movimento do sinal de forma fluida durante esse tempo. 
+  O sinal deve começar no frame 0 e terminar perto do frame 30.
+
+4. O SEGREDO PARA A IA FUNCIONAR (VARIABILIDADE):
+Não faça as 30 repetições exatamente no mesmo lugar! Para a nossa IA ficar robusta, mude um 
+pouco de posição ao longo das tentativas:
+  * Faça 10 tentativas na distância normal.
+  * Faça 10 tentativas um pouco mais perto da câmera.
+  * Faça 10 tentativas deslocando o corpo levemente para os lados (esquerda/direita).
+
+5. COMO ENVIAR OS DADOS:
+Assim que o script terminar, ele vai criar uma pasta chamada 'dataset/' no seu computador. 
+Compacte essa pasta (em .zip ou .rar) e me envie! 
+
+Dica: Se precisar parar a gravação antes do fim por qualquer motivo, clique na tela da 
+webcam e aperte a tecla 'q'.
+===================================================================
