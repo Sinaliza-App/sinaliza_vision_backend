@@ -7,6 +7,7 @@ const bcrypt = require('bcryptjs'); // Para hashear senhas
 const jwt = require('jsonwebtoken'); // Para gerar tokens de login
 const authMiddleware = require('./authMiddleware'); // Nosso "segurança"
 const { Pool } = require('pg'); // Para o PostgreSQL
+const { predictSign } = require('./services/visionService'); // Importa a função de previsão do YOLO do serviço de visão
 // --- 1. IMPORTAR O SWAGGER ---
 const swaggerUi = require('swagger-ui-express');
 const YAML = require('yamljs');
@@ -29,7 +30,8 @@ const pool = new Pool({
 
 // --- Middlewares Essenciais ---
 app.use(cors()); // Permite que o Flutter acesse a API
-app.use(express.json()); // Permite que o servidor leia JSON no corpo das requisições
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // --- 3. CONFIGURAR ROTA DO SWAGGER ---
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
@@ -38,6 +40,23 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 
 app.get('/', (req, res) => {
   res.send('API Sinaliza está online! Acesse /api-docs para documentação.');
+});
+
+app.post('/api/vision/predict', async (req, res) => {
+    try {
+        const payload = req.body;
+
+        if (!payload.image) {
+            return res.status(400).json({ error: 'Nenhuma imagem fornecida' });
+        }
+
+        // Passa a bola com dimensões e tudo para o maestro
+        const result = await predictSign(payload);
+        return res.status(200).json(result);
+
+    } catch (error) {
+        return res.status(500).json({ error: 'Erro interno ao processar o sinal' });
+    }
 });
 
 // --- NOVA ROTA: LISTAR MÓDULOS ---
