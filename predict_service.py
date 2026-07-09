@@ -4,8 +4,10 @@ import numpy as np
 import base64
 from ultralytics import YOLO
 import os
+import torch
 
 app = Flask(__name__)
+torch.set_num_threads(1)
 
 # Carrega o seu modelo YOLO (verifique se o nome do arquivo .pt está correto)
 model = YOLO('modelo_yolo_libras.pt')
@@ -37,7 +39,7 @@ def predict():
             return jsonify({'error': f'Erro ao remontar pixels: {str(e)}'}), 400
 
         # Passa pro modelo
-        results = model(img)
+        results = model.predict(source=img, imgsz=320, conf=0.5, verbose=False)
         
         prediction = "Nenhum"
         confidence = 0.0
