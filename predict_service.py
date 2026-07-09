@@ -3,6 +3,7 @@ import cv2
 import numpy as np
 import base64
 from ultralytics import YOLO
+import os
 
 app = Flask(__name__)
 
@@ -56,5 +57,7 @@ def predict():
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
-    # Roda esse microsserviço na porta 5000
-    app.run(host='0.0.0.0', port=5000)
+    # O Render injeta a porta na variável de ambiente PORT. O padrão local fica 5000.
+    port = int(os.environ.get("PORT", 5000))    
+    # O host 0.0.0.0 é obrigatório para servidores em nuvem
+    app.run(host='0.0.0.0', port=port)

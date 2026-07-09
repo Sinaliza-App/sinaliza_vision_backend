@@ -4,7 +4,7 @@
 ultralytics>=8.0.0
 
 # OpenCV - Processamento de imagem e vídeo
-opencv-python>=4.8.0
+opencv-python-headless>=4.8.0
 
 # NumPy - Operações numéricas
 numpy>=1.24.0
