@@ -1,4 +1,5 @@
 # Requisitos para Sistema de Detecção de Libras com YOLO
+--extra-index-url https://download.pytorch.org/whl/cpu
 
 # YOLO - Detecção de objetos
 ultralytics>=8.0.0
@@ -14,6 +15,8 @@ numpy>=1.24.0
 # torchvision>=0.15.0
 
 # Outras dependências úteis
+torch>=2.0.0
+torchvision>=0.15.0
 Pillow>=10.0.0
 matplotlib>=3.7.0
 seaborn>=0.12.0
