@@ -5,6 +5,7 @@ import base64
 from ultralytics import YOLO
 import os
 import torch
+import traceback
 
 app = Flask(__name__)
 torch.set_num_threads(1)
@@ -39,7 +40,7 @@ def predict():
             return jsonify({'error': f'Erro ao remontar pixels: {str(e)}'}), 400
 
         # Passa pro modelo
-        results = model.predict(source=img, imgsz=320, conf=0.5, verbose=False)
+        results = model.predict(source=img, conf=0.5, verbose=False)
         
         prediction = "Nenhum"
         confidence = 0.0
@@ -54,9 +55,10 @@ def predict():
             'prediction': prediction,
             'confidence': confidence
         }), 200
-
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        print(f"🚨 ERRO FATAL NA IA: {e}")
+        traceback.print_exc() # Isso vai cuspir as letras vermelhas no log!
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
     # O Render injeta a porta na variável de ambiente PORT. O padrão local fica 5000.
