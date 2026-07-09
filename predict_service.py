@@ -10,7 +10,7 @@ app = Flask(__name__)
 torch.set_num_threads(1)
 
 # Carrega o seu modelo YOLO (verifique se o nome do arquivo .pt está correto)
-model = YOLO('modelo_yolo_libras.pt')
+model = YOLO('modelo_yolo_libras.onnx')  # Substitua pelo caminho correto do seu modelo ONNX
 
 @app.route('/predict', methods=['POST'])
 @app.route('/predict', methods=['POST'])
