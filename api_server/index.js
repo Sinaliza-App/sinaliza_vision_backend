@@ -14,7 +14,7 @@ const YAML = require('yamljs');
 // -----------------------------
 
 const app = express();
-const port = 3000;
+const PORT = process.env.PORT || 3000;
 
 // --- 2. CARREGAR O ARQUIVO YAML ---
 const swaggerDocument = YAML.load('./swagger.yaml');
@@ -477,6 +477,6 @@ app.delete('/users/me', authMiddleware, async (req, res) => {
 
 // app.listen ...
 // --- Iniciar o Servidor ---
-app.listen(port, () => {
-  console.log(`Servidor Node.js rodando na porta http://localhost:${port}`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Servidor Node.js rodando na porta http://localhost:${PORT}`);
 });
