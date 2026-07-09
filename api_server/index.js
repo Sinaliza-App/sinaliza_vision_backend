@@ -43,6 +43,7 @@ app.get('/', (req, res) => {
 });
 
 app.post('/api/vision/predict', async (req, res) => {
+  console.log("📸 [NODE] Recebi uma requisição da câmera do app!")
     try {
         const payload = req.body;
 
