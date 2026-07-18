@@ -175,7 +175,7 @@ async def handler(websocket):
 
             
             # 3. Detecta o gesto
-            gesto_detectado, confianca = detector.processar_imagem(img_bgr)
+            gesto_detectado, confianca = detector.processar_imagem(img_espelhada_v)
             
             # 4. Suaviza o resultado (tira a tremedeira)
             gesto_final, conf_final = detector.obter_gesto_suavizado(gesto_detectado, confianca)
