@@ -94,11 +94,16 @@ class DetectorLibras:
 
         return melhor_resultado, maior_confianca
 
-    def obter_gesto_suavizado(self, gesto_atual, confianca):
+    def obter_gesto_suavizado(self, gesto_atual, confianca, is_movement=False):
         """
         Usa estatística para estabilizar a detecção.
         Só confirma o gesto se ele aparecer na maioria dos últimos frames.
         """
+        if is_movement and gesto_atual:
+            # Para movimentos rápidos, não exigimos repetição, pois a pose chave
+            # pode durar apenas 1 ou 2 frames. Se detectou com confiança alta, aceita!
+            return gesto_atual, confianca
+
         if gesto_atual:
             self.historico_deteccoes.append(gesto_atual)
         else:
@@ -171,7 +176,7 @@ async def handler(websocket):
             # -----------------------------------------------------------
             # Tente esta rotação (Anti-horário)
             img_bgr = cv2.rotate(img_bgr, cv2.ROTATE_90_COUNTERCLOCKWISE)
-            img_espelhada_v = cv2.flip(img_bgr, 0)
+            img_espelhada_h = cv2.flip(img_bgr, 1)
 
             # -----------------------------------------------------------
             # 3. Escolhe o detector correto
@@ -182,23 +187,25 @@ async def handler(websocket):
                 detector_ativo = detector_alfabeto
 
             # 4. Detecta o gesto
-            gesto_detectado, confianca = detector_ativo.processar_imagem(img_espelhada_v)
+            gesto_detectado, confianca = detector_ativo.processar_imagem(img_espelhada_h)
             
             # 5. Suaviza o resultado (tira a tremedeira)
-            gesto_final, conf_final = detector_ativo.obter_gesto_suavizado(gesto_detectado, confianca)
+            gesto_final, conf_final = detector_ativo.obter_gesto_suavizado(
+                gesto_detectado, confianca, is_movement=(model_type == 'movimento')
+            )
 
             # 5. Prepara a resposta
             if gesto_final:
                 response = {
-                    "gesto": gesto_final,
-                    "confianca": float(conf_final)
+                    "prediction": gesto_final,
+                    "confidence": float(conf_final)
                 }
                 # Log simples no terminal para você acompanhar
                 print(f"🤟 Detectado: {gesto_final} ({conf_final:.2f})", end='\r')
             else:
                 response = {
-                    "gesto": "Nenhum",
-                    "confianca": 0.0
+                    "prediction": "Nenhum",
+                    "confidence": 0.0
                 }
             
             # 6. Envia de volta para o Flutter

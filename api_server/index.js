@@ -7,7 +7,6 @@ const bcrypt = require('bcryptjs'); // Para hashear senhas
 const jwt = require('jsonwebtoken'); // Para gerar tokens de login
 const authMiddleware = require('./authMiddleware'); // Nosso "segurança"
 const { Pool } = require('pg'); // Para o PostgreSQL
-const { predictSign } = require('./services/visionService'); // Importa a função de previsão do YOLO do serviço de visão
 // --- 1. IMPORTAR O SWAGGER ---
 const swaggerUi = require('swagger-ui-express');
 const YAML = require('yamljs');
@@ -42,23 +41,6 @@ app.get('/', (req, res) => {
   res.send('API Sinaliza está online! Acesse /api-docs para documentação.');
 });
 
-app.post('/api/vision/predict', async (req, res) => {
-  console.log("📸 [NODE] Recebi uma requisição da câmera do app!")
-    try {
-        const payload = req.body;
-
-        if (!payload.image) {
-            return res.status(400).json({ error: 'Nenhuma imagem fornecida' });
-        }
-
-        // Passa a bola com dimensões e tudo para o maestro
-        const result = await predictSign(payload);
-        return res.status(200).json(result);
-
-    } catch (error) {
-        return res.status(500).json({ error: 'Erro interno ao processar o sinal' });
-    }
-});
 
 // --- NOVA ROTA: LISTAR MÓDULOS ---
 app.get('/modules', authMiddleware, async (req, res) => {
