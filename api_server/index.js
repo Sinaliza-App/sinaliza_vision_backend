@@ -120,7 +120,7 @@ app.get('/dictionary', authMiddleware, async (req, res) => {
   try {
     const client = await pool.connect();
     try {
-      const result = await client.query('SELECT id, title, image_url, type, expected_sign FROM lessons ORDER BY title ASC');
+      const result = await client.query('SELECT * FROM lessons ORDER BY title ASC');
       res.status(200).json(result.rows);
     } catch (dbError) {
       console.error('Erro no banco de dados:', dbError);
