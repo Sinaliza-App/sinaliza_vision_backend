@@ -15,6 +15,12 @@ const pool = new Pool({
     try {
       await client.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_picture TEXT;');
       console.log('Coluna profile_picture garantida com sucesso.');
+
+      await client.query('ALTER TABLE lessons ADD COLUMN IF NOT EXISTS thumbnail_url TEXT;');
+      console.log('Coluna thumbnail_url garantida na tabela lessons com sucesso.');
+
+      await client.query('ALTER TABLE lessons ADD COLUMN IF NOT EXISTS gif_url TEXT;');
+      console.log('Coluna gif_url garantida na tabela lessons com sucesso.');
     } catch(e) {
       console.log('Erro ao adicionar coluna:', e);
     } finally {
