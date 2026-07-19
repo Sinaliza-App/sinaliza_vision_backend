@@ -24,20 +24,18 @@ except ImportError:
 # ============================
 # 🔧 CONFIGURAÇÕES GERAIS
 # ============================
-# Caminho exato que você me mostrou na imagem
-MODEL_PATH = "runs_novo/libras_fsl/weights/best.pt" 
 CONFIDENCE = 0.60  # Confiança mínima para considerar um acerto
 PORTA_SERVIDOR = 8080
 
 class DetectorLibras:
     """Classe responsável por carregar o modelo e fazer a inferência."""
     
-    def __init__(self):
+    def __init__(self, model_path):
         # Define o diretório base (onde este script está)
         base_dir = os.path.dirname(os.path.abspath(__file__))
         
         # Monta o caminho absoluto do modelo
-        self.path_modelo = os.path.join(base_dir, MODEL_PATH)
+        self.path_modelo = os.path.join(base_dir, model_path)
         
         self.modelo = None
         self.carregado = False
@@ -133,7 +131,8 @@ class DetectorLibras:
 # SERVIDOR WEBSOCKET (Lógica de Conexão)
 # ===================================================================
 
-detector: DetectorLibras = None
+detector_alfabeto: DetectorLibras = None
+detector_movimento: DetectorLibras = None
 
 async def handler(websocket):
     """Gerencia a conexão com o App Flutter."""
@@ -148,6 +147,7 @@ async def handler(websocket):
                 height = data['height']
                 width = data['width']
                 stride = data['stride']
+                model_type = data.get('model_type', 'alfabeto')
             except KeyError:
                 print("⚠ Erro: JSON recebido com formato inválido.")
                 continue
@@ -173,12 +173,19 @@ async def handler(websocket):
             img_bgr = cv2.rotate(img_bgr, cv2.ROTATE_90_COUNTERCLOCKWISE)
             img_espelhada_v = cv2.flip(img_bgr, 0)
 
+            # -----------------------------------------------------------
+            # 3. Escolhe o detector correto
+            # -----------------------------------------------------------
+            if model_type == 'movimento' and detector_movimento is not None and detector_movimento.carregado:
+                detector_ativo = detector_movimento
+            else:
+                detector_ativo = detector_alfabeto
+
+            # 4. Detecta o gesto
+            gesto_detectado, confianca = detector_ativo.processar_imagem(img_espelhada_v)
             
-            # 3. Detecta o gesto
-            gesto_detectado, confianca = detector.processar_imagem(img_espelhada_v)
-            
-            # 4. Suaviza o resultado (tira a tremedeira)
-            gesto_final, conf_final = detector.obter_gesto_suavizado(gesto_detectado, confianca)
+            # 5. Suaviza o resultado (tira a tremedeira)
+            gesto_final, conf_final = detector_ativo.obter_gesto_suavizado(gesto_detectado, confianca)
 
             # 5. Prepara a resposta
             if gesto_final:
@@ -203,16 +210,21 @@ async def handler(websocket):
         print(f"\n❌ Erro na conexão: {e}")
 
 async def main():
-    global detector
+    global detector_alfabeto, detector_movimento
     print("\n" + "="*60)
-    print("🚀 SERVIDOR SINALIZA - VISÃO COMPUTACIONAL")
+    print("🚀 SERVIDOR SINALIZA - VISÃO COMPUTACIONAL (MULTI-MODELO)")
     print("="*60)
     
-    # Inicializa o detector
-    detector = DetectorLibras()
+    # Inicializa os detectores
+    print("Carregando IA do Alfabeto...")
+    detector_alfabeto = DetectorLibras("runs_novo/libras_fsl/weights/best.pt")
     
-    if not detector.carregado:
-        print("Encerrando servidor por falta de modelo.")
+    print("Preparando slot para IA de Movimento...")
+    # Quando o modelo estiver pronto, substitua None pelo caminho do arquivo. Ex: DetectorLibras("movimento.pt")
+    detector_movimento = None 
+    
+    if not detector_alfabeto.carregado:
+        print("Encerrando servidor por falta do modelo principal (Alfabeto).")
         return
 
     # Inicia o servidor
