@@ -123,12 +123,12 @@ app.get('/users/me', authMiddleware, async (req, res) => {
     try {
       const result = await client.query(`
         SELECT 
-          u.id, u.name, u.email, u.created_at,
+          u.id, u.name, u.email, u.created_at, u.profile_picture,
           COALESCE(SUM(p.score), 0) as total_score
         FROM users u
         LEFT JOIN progress p ON u.id = p.user_id
         WHERE u.id = $1
-        GROUP BY u.id, u.name, u.email, u.created_at
+        GROUP BY u.id, u.name, u.email, u.created_at, u.profile_picture
       `, [userId]);
 
       if (result.rows.length === 0) {
@@ -221,10 +221,11 @@ app.get('/ranking', authMiddleware, async (req, res) => {
       const result = await client.query(`
         SELECT 
           u.name, 
+          u.profile_picture,
           COALESCE(SUM(p.score), 0)::int as total_score
         FROM users u
         LEFT JOIN progress p ON u.id = p.user_id
-        GROUP BY u.id, u.name
+        GROUP BY u.id, u.name, u.profile_picture
         ORDER BY total_score DESC
         LIMIT 50
       `);
@@ -361,7 +362,7 @@ app.post('/users/login', async (req, res) => {
 
 app.put('/users/me', authMiddleware, async (req, res) => {
   const userId = req.user.id;
-  const { name, password } = req.body;
+  const { name, password, profile_picture } = req.body;
 
   try {
     const client = await pool.connect();
@@ -383,6 +384,12 @@ app.put('/users/me', authMiddleware, async (req, res) => {
         const passwordHash = await bcrypt.hash(password, salt);
         fields.push(`password_hash = $${paramCount}`);
         values.push(passwordHash);
+        paramCount++;
+      }
+
+      if (profile_picture) {
+        fields.push(`profile_picture = $${paramCount}`);
+        values.push(profile_picture);
         paramCount++;
       }
 
