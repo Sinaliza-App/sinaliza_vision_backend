@@ -115,6 +115,25 @@ app.get('/lessons', authMiddleware, async (req, res) => {
   }
 });
 
+// --- Rota de Dicionário ---
+app.get('/dictionary', authMiddleware, async (req, res) => {
+  try {
+    const client = await pool.connect();
+    try {
+      const result = await client.query('SELECT id, title, image_url, type, expected_sign FROM lessons ORDER BY title ASC');
+      res.status(200).json(result.rows);
+    } catch (dbError) {
+      console.error('Erro no banco de dados:', dbError);
+      res.status(500).json({ message: 'Erro ao buscar dicionário.' });
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error('Erro geral no servidor:', error);
+    res.status(500).json({ message: 'Erro no servidor' });
+  }
+});
+
 // --- Rota de Perfil com Pontuação ---
 app.get('/users/me', authMiddleware, async (req, res) => {
   try {
