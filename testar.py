@@ -18,10 +18,23 @@ IMAGE_PATH = "test/images/1.jpg"  # usado se USE_WEBCAM = False
 # ============================
 
 def testar_webcam(model):
+    print("🎥 Inicializando webcam...")
     cap = cv2.VideoCapture(0)
+    if not cap.isOpened():
+        cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+        
+    if not cap.isOpened():
+        for i in [1, 2]:
+            cap = cv2.VideoCapture(i)
+            if not cap.isOpened():
+                cap = cv2.VideoCapture(i, cv2.CAP_DSHOW)
+            if cap.isOpened():
+                print(f"⚠️ Webcam no índice 0 falhou. Usando índice {i} alternativo.")
+                break
 
     if not cap.isOpened():
-        print("❌ ERRO: Não foi possível acessar a webcam.")
+        print("❌ ERRO: Não foi possível acessar a webcam em nenhum índice (0, 1, 2).")
+        print("Certifique-se de que a câmera não está em uso por outro aplicativo (como Discord, Teams, Zoom, Flutter ou Navegador) e que os drivers estão atualizados.")
         return
 
     print("🎥 Webcam iniciada. Pressione 'Q' para sair.")

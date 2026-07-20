@@ -1,0 +1,11 @@
+# Virtual Env
+.venv/
+__pycache__/
+*.pyc
+
+# Dataset
+dataset/
+
+# Env
+.env
+node_modules/
