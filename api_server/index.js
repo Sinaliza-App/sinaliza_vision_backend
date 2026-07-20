@@ -142,12 +142,12 @@ app.get('/users/me', authMiddleware, async (req, res) => {
     try {
       const result = await client.query(`
         SELECT 
-          u.id, u.name, u.email, u.created_at, u.profile_picture,
+          u.id, u.name, u.email, u.created_at, u.profile_picture, u.streak_count, u.last_practice_date,
           COALESCE(SUM(p.score), 0) as total_score
         FROM users u
         LEFT JOIN progress p ON u.id = p.user_id
         WHERE u.id = $1
-        GROUP BY u.id, u.name, u.email, u.created_at, u.profile_picture
+        GROUP BY u.id, u.name, u.email, u.created_at, u.profile_picture, u.streak_count, u.last_practice_date
       `, [userId]);
 
       if (result.rows.length === 0) {
@@ -156,6 +156,21 @@ app.get('/users/me', authMiddleware, async (req, res) => {
 
       const user = result.rows[0];
       user.total_score = parseInt(user.total_score); // Garante número
+      
+      // Verifica se a ofensiva expirou
+      let currentStreak = user.streak_count || 0;
+      if (user.last_practice_date) {
+        const now = new Date();
+        const lastPractice = new Date(user.last_practice_date);
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const lastDay = new Date(lastPractice.getFullYear(), lastPractice.getMonth(), lastPractice.getDate());
+        const diffDays = Math.round((today - lastDay) / (1000 * 60 * 60 * 24));
+        
+        if (diffDays > 1) {
+          currentStreak = 0; // Se passou de ontem e não treinou, zera no visual
+        }
+      }
+      user.streak_count = currentStreak;
 
       res.status(200).json(user);
 
@@ -206,20 +221,55 @@ app.post('/progress', authMiddleware, async (req, res) => {
   try {
     client = await pool.connect();
     
-    const result = await client.query(
-      'INSERT INTO progress (user_id, lesson_id, score) VALUES ($1, $2, $3) RETURNING id',
-      [userId, lesson_id, finalScore]
-    );
-    
-    return res.status(201).json({ 
-      message: `Progresso salvo! Você ganhou ${finalScore} pontos!`, 
-      progressId: result.rows[0].id 
-    });
+    // Atualiza a ofensiva
+    const userRes = await client.query('SELECT streak_count, last_practice_date FROM users WHERE id = $1', [userId]);
+    let currentStreak = 0;
+    if (userRes.rows.length > 0) {
+      const user = userRes.rows[0];
+      const now = new Date();
+      const lastPractice = user.last_practice_date ? new Date(user.last_practice_date) : null;
+      
+      currentStreak = user.streak_count || 0;
+
+      if (!lastPractice) {
+        currentStreak = 1;
+      } else {
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const lastDay = new Date(lastPractice.getFullYear(), lastPractice.getMonth(), lastPractice.getDate());
+        const diffDays = Math.round((today - lastDay) / (1000 * 60 * 60 * 24));
+        
+        if (diffDays === 1) {
+          currentStreak += 1;
+        } else if (diffDays > 1) {
+          currentStreak = 1;
+        }
+      }
+      await client.query('UPDATE users SET streak_count = $1, last_practice_date = $2 WHERE id = $3', [currentStreak, now, userId]);
+    }
+
+    try {
+      const result = await client.query(
+        'INSERT INTO progress (user_id, lesson_id, score) VALUES ($1, $2, $3) RETURNING id',
+        [userId, lesson_id, finalScore]
+      );
+      
+      return res.status(201).json({ 
+        message: `Progresso salvo! Você ganhou ${finalScore} pontos!`, 
+        progressId: result.rows[0].id,
+        streak_count: currentStreak
+      });
+    } catch (insertError) {
+      if (insertError.code === '23505') {
+        // Já completou, mas ofensiva foi salva!
+        return res.status(200).json({ 
+          message: 'Você já concluiu esta lição. Ofensiva atualizada!',
+          streak_count: currentStreak 
+        });
+      }
+      throw insertError;
+    }
 
   } catch (error) {
-    if (error.code === '23505') {
-      return res.status(409).json({ message: 'Este progresso já foi salvo anteriormente.' });
-    }
     console.error('Erro na rota /progress:', error);
     if (!res.headersSent) {
       return res.status(500).json({ message: 'Erro ao salvar progresso.' });
