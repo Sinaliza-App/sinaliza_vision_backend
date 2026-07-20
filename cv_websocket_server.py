@@ -16,6 +16,9 @@ import torch
 import torch.nn as nn
 import mediapipe as mp
 
+# Inicializa as referências globais do MediaPipe
+mp_holistic = mp.solutions.holistic
+
 # Tenta importar o YOLO
 try:
     from ultralytics import YOLO
@@ -28,7 +31,7 @@ except ImportError:
 # 🔧 CONFIGURAÇÕES GERAIS
 # ============================
 CONFIDENCE = 0.60  # Confiança mínima para YOLO
-CONFIDENCE_LSTM = 0.55 # Confiança mínima para LSTM (31 classes)
+CONFIDENCE_LSTM = 0.85 # Confiança mínima para LSTM (MUITO RÍGIDO para evitar chutes parados)
 PORTA_SERVIDOR = 8080
 
 # ============================
@@ -81,6 +84,10 @@ class DetectorLibras:
         self.historico_deteccoes = deque(maxlen=10)
         
         self.carregar_modelo()
+        
+    def reset(self):
+        """Limpa o histórico de detecções (útil ao trocar de lição)."""
+        self.historico_deteccoes.clear()
     
     def carregar_modelo(self):
         try:
@@ -183,10 +190,14 @@ class DetectorLibrasMovimento:
         self.historico_predicoes = deque(maxlen=5)
         
         # Inicia MediaPipe Holistic
-        self.mp_holistic = mp.solutions.holistic
-        self.holistic = self.mp_holistic.Holistic(min_detection_confidence=0.5, min_tracking_confidence=0.5)
+        self.holistic = mp_holistic.Holistic(min_detection_confidence=0.5, min_tracking_confidence=0.5)
         
         self.carregar_modelo()
+        
+    def reset(self):
+        """Limpa o buffer de frames para não vazar movimento de uma lição para a outra."""
+        self.buffer.clear()
+        self.historico_predicoes.clear()
         
     def carregar_modelo(self):
         try:
@@ -226,7 +237,18 @@ class DetectorLibrasMovimento:
         
         # Só prevê se tiver 30 frames no buffer
         if len(self.buffer) == self.num_frames:
-            res_tensor = torch.tensor(np.array(self.buffer), dtype=torch.float32).unsqueeze(0).to(self.device)
+            buffer_np = np.array(self.buffer)
+            
+            # --- FILTRO DE PARALISIA (EVITAR CHUTES QUANDO ESTIVER PARADO) ---
+            # As mãos começam a partir do índice 132 no array (depois da pose)
+            maos_np = buffer_np[:, 132:]
+            variancia_maos = np.var(maos_np, axis=0).mean()
+            
+            # Se a variância for muito baixa, significa que não houve movimento significativo
+            if variancia_maos < 0.0002:
+                return None, 0.0
+
+            res_tensor = torch.tensor(buffer_np, dtype=torch.float32).unsqueeze(0).to(self.device)
             
             with torch.no_grad():
                 pred = self.modelo(res_tensor)
@@ -240,6 +262,12 @@ class DetectorLibrasMovimento:
         return None, 0.0
         
     def obter_gesto_suavizado(self, gesto_atual, confianca, is_movement=True):
+        if is_movement:
+            # Para movimento, a ação é rápida. Se a confiança for alta, dispara logo!
+            if gesto_atual and confianca > CONFIDENCE_LSTM:
+                return gesto_atual, confianca
+            return None, 0.0
+            
         if gesto_atual:
             self.historico_predicoes.append(gesto_atual)
         else:
@@ -273,6 +301,10 @@ async def handler(websocket):
     """Gerencia a conexão com o App Flutter."""
     print(f"📱 Cliente conectado: {websocket.remote_address}")
     
+    # 🧹 Limpa os buffers quando um novo cliente conecta (evita vazar gestos da lição anterior)
+    if detector_alfabeto: detector_alfabeto.reset()
+    if detector_movimento: detector_movimento.reset()
+    
     try:
         async for message in websocket:
             # 1. Recebe o JSON com a imagem Base64 do Flutter
@@ -301,12 +333,22 @@ async def handler(websocket):
             img_bgr = cv2.cvtColor(img_gray, cv2.COLOR_GRAY2BGR)
             
             # -----------------------------------------------------------
-            # 🔄 CORREÇÃO DE ROTAÇÃO (CRUCIAL)
-            # A câmera do Flutter chega "deitada". Giramos 90º horário.
+            # 🔄 CORREÇÃO DE ROTAÇÃO E PADDING (CRUCIAL)
             # -----------------------------------------------------------
-            # Tente esta rotação (Anti-horário)
+            # A câmera do Flutter chega "deitada". Giramos 90º anti-horário.
             img_bgr = cv2.rotate(img_bgr, cv2.ROTATE_90_COUNTERCLOCKWISE)
             img_espelhada_h = cv2.flip(img_bgr, 1)
+
+            # Para a IA (principalmente MediaPipe), a proporção x/y é fundamental.
+            # Como a imagem em pé (retrato) distorce as proporções em relação à paisagem,
+            # adicionamos bordas pretas para tornar a imagem quadrada.
+            h, w = img_espelhada_h.shape[:2]
+            if h > w:
+                pad = (h - w) // 2
+                img_espelhada_h = cv2.copyMakeBorder(img_espelhada_h, 0, 0, pad, pad, cv2.BORDER_CONSTANT, value=[0, 0, 0])
+            elif w > h:
+                pad = (w - h) // 2
+                img_espelhada_h = cv2.copyMakeBorder(img_espelhada_h, pad, pad, 0, 0, cv2.BORDER_CONSTANT, value=[0, 0, 0])
 
             # -----------------------------------------------------------
             # 3. Escolhe o detector correto
