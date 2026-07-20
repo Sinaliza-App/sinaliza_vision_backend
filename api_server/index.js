@@ -315,6 +315,28 @@ app.post('/progress', authMiddleware, async (req, res) => {
   }
 });
 
+// --- Rota de Quiz Status ---
+app.get('/quiz/status', authMiddleware, async (req, res) => {
+  const userId = req.user.id;
+  let client;
+  try {
+    client = await pool.connect();
+    // Check if the user already played today
+    const checkRes = await client.query(
+      'SELECT id FROM quiz_progress WHERE user_id = $1 AND DATE(created_at) = CURRENT_DATE LIMIT 1',
+      [userId]
+    );
+    const alreadyPlayed = checkRes.rows.length > 0;
+    
+    return res.status(200).json({ already_played: alreadyPlayed });
+  } catch (error) {
+    console.error('Erro na rota /quiz/status:', error);
+    return res.status(500).json({ message: 'Erro ao verificar status do quiz.' });
+  } finally {
+    if (client) client.release();
+  }
+});
+
 // --- Rota de Quiz Progress ---
 app.post('/quiz/progress', authMiddleware, async (req, res) => {
   const userId = req.user.id;
@@ -324,6 +346,15 @@ app.post('/quiz/progress', authMiddleware, async (req, res) => {
   try {
     client = await pool.connect();
     
+    // Check limit
+    const checkRes = await client.query(
+      'SELECT id FROM quiz_progress WHERE user_id = $1 AND DATE(created_at) = CURRENT_DATE LIMIT 1',
+      [userId]
+    );
+    if (checkRes.rows.length > 0) {
+      return res.status(400).json({ message: 'Você já completou o quiz de hoje!' });
+    }
+
     // Atualiza ofensiva
     const userRes = await client.query('SELECT streak_count, last_practice_date FROM users WHERE id = $1', [userId]);
     let currentStreak = 0;
