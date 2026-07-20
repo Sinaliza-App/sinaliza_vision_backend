@@ -120,7 +120,14 @@ app.get('/dictionary', authMiddleware, async (req, res) => {
   try {
     const client = await pool.connect();
     try {
-      const result = await client.query('SELECT * FROM lessons ORDER BY title ASC');
+      const userId = req.user.id;
+      const result = await client.query(`
+        SELECT l.*, 
+               CASE WHEN fs.sign_id IS NOT NULL THEN true ELSE false END as is_favorite 
+        FROM lessons l 
+        LEFT JOIN favorite_signs fs ON l.id = fs.sign_id AND fs.user_id = $1 
+        ORDER BY l.title ASC
+      `, [userId]);
       res.status(200).json(result.rows);
     } catch (dbError) {
       console.error('Erro no banco de dados:', dbError);
@@ -134,6 +141,33 @@ app.get('/dictionary', authMiddleware, async (req, res) => {
   }
 });
 
+// --- Rota Toggle Favorite ---
+app.post('/dictionary/favorite', authMiddleware, async (req, res) => {
+  const userId = req.user.id;
+  const { sign_id } = req.body;
+
+  if (!sign_id) return res.status(400).json({ message: 'sign_id é obrigatório.' });
+
+  try {
+    const client = await pool.connect();
+    try {
+      const check = await client.query('SELECT 1 FROM favorite_signs WHERE user_id = $1 AND sign_id = $2', [userId, sign_id]);
+      if (check.rows.length > 0) {
+        await client.query('DELETE FROM favorite_signs WHERE user_id = $1 AND sign_id = $2', [userId, sign_id]);
+        res.status(200).json({ is_favorite: false });
+      } else {
+        await client.query('INSERT INTO favorite_signs (user_id, sign_id) VALUES ($1, $2)', [userId, sign_id]);
+        res.status(201).json({ is_favorite: true });
+      }
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error('Erro no favorite:', error);
+    res.status(500).json({ message: 'Erro ao processar favorito.' });
+  }
+});
+
 // --- Rota de Perfil com Pontuação ---
 app.get('/users/me', authMiddleware, async (req, res) => {
   try {
@@ -143,7 +177,7 @@ app.get('/users/me', authMiddleware, async (req, res) => {
       const result = await client.query(`
         SELECT 
           u.id, u.name, u.email, u.created_at, u.profile_picture, u.streak_count, u.last_practice_date,
-          COALESCE(SUM(p.score), 0) as total_score
+          (COALESCE(SUM(p.score), 0) + COALESCE((SELECT SUM(score) FROM quiz_progress qp WHERE qp.user_id = u.id), 0)) as total_score
         FROM users u
         LEFT JOIN progress p ON u.id = p.user_id
         WHERE u.id = $1
@@ -281,6 +315,60 @@ app.post('/progress', authMiddleware, async (req, res) => {
   }
 });
 
+// --- Rota de Quiz Progress ---
+app.post('/quiz/progress', authMiddleware, async (req, res) => {
+  const userId = req.user.id;
+  const { score } = req.body;
+  const finalScore = score || 5;
+  let client;
+  try {
+    client = await pool.connect();
+    
+    // Atualiza ofensiva
+    const userRes = await client.query('SELECT streak_count, last_practice_date FROM users WHERE id = $1', [userId]);
+    let currentStreak = 0;
+    if (userRes.rows.length > 0) {
+      const user = userRes.rows[0];
+      const now = new Date();
+      const lastPractice = user.last_practice_date ? new Date(user.last_practice_date) : null;
+      
+      currentStreak = user.streak_count || 0;
+      if (!lastPractice) {
+        currentStreak = 1;
+      } else {
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const lastDay = new Date(lastPractice.getFullYear(), lastPractice.getMonth(), lastPractice.getDate());
+        const diffDays = Math.round((today - lastDay) / (1000 * 60 * 60 * 24));
+        
+        if (diffDays === 1) {
+          currentStreak += 1;
+        } else if (diffDays > 1) {
+          currentStreak = 1;
+        }
+      }
+      await client.query('UPDATE users SET streak_count = $1, last_practice_date = $2 WHERE id = $3', [currentStreak, now, userId]);
+    }
+
+    await client.query(
+      'INSERT INTO quiz_progress (user_id, score) VALUES ($1, $2)',
+      [userId, finalScore]
+    );
+    
+    return res.status(201).json({ 
+      message: `Progresso de quiz salvo! Você ganhou ${finalScore} pontos!`,
+      streak_count: currentStreak
+    });
+
+  } catch (error) {
+    console.error('Erro na rota /quiz/progress:', error);
+    if (!res.headersSent) {
+      return res.status(500).json({ message: 'Erro ao salvar quiz.' });
+    }
+  } finally {
+    if (client) client.release();
+  }
+});
+
 // --- Rota de Ranking ---
 app.get('/ranking', authMiddleware, async (req, res) => {
   try {
@@ -291,7 +379,7 @@ app.get('/ranking', authMiddleware, async (req, res) => {
         SELECT 
           u.name, 
           u.profile_picture,
-          COALESCE(SUM(p.score), 0)::int as total_score
+          (COALESCE(SUM(p.score), 0) + COALESCE((SELECT SUM(score) FROM quiz_progress qp WHERE qp.user_id = u.id), 0))::int as total_score
         FROM users u
         LEFT JOIN progress p ON u.id = p.user_id
         GROUP BY u.id, u.name, u.profile_picture
