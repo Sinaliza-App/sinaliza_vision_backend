@@ -7,7 +7,6 @@ const bcrypt = require('bcryptjs'); // Para hashear senhas
 const jwt = require('jsonwebtoken'); // Para gerar tokens de login
 const authMiddleware = require('./authMiddleware'); // Nosso "segurança"
 const { Pool } = require('pg'); // Para o PostgreSQL
-const { predictSign } = require('./services/visionService'); // Importa a função de previsão do YOLO do serviço de visão
 // --- 1. IMPORTAR O SWAGGER ---
 const swaggerUi = require('swagger-ui-express');
 const YAML = require('yamljs');
@@ -42,23 +41,6 @@ app.get('/', (req, res) => {
   res.send('API Sinaliza está online! Acesse /api-docs para documentação.');
 });
 
-app.post('/api/vision/predict', async (req, res) => {
-  console.log("📸 [NODE] Recebi uma requisição da câmera do app!")
-    try {
-        const payload = req.body;
-
-        if (!payload.image) {
-            return res.status(400).json({ error: 'Nenhuma imagem fornecida' });
-        }
-
-        // Passa a bola com dimensões e tudo para o maestro
-        const result = await predictSign(payload);
-        return res.status(200).json(result);
-
-    } catch (error) {
-        return res.status(500).json({ error: 'Erro interno ao processar o sinal' });
-    }
-});
 
 // --- NOVA ROTA: LISTAR MÓDULOS ---
 app.get('/modules', authMiddleware, async (req, res) => {
@@ -133,6 +115,59 @@ app.get('/lessons', authMiddleware, async (req, res) => {
   }
 });
 
+// --- Rota de Dicionário ---
+app.get('/dictionary', authMiddleware, async (req, res) => {
+  try {
+    const client = await pool.connect();
+    try {
+      const userId = req.user.id;
+      const result = await client.query(`
+        SELECT l.*, 
+               CASE WHEN fs.sign_id IS NOT NULL THEN true ELSE false END as is_favorite 
+        FROM lessons l 
+        LEFT JOIN favorite_signs fs ON l.id = fs.sign_id AND fs.user_id = $1 
+        ORDER BY l.title ASC
+      `, [userId]);
+      res.status(200).json(result.rows);
+    } catch (dbError) {
+      console.error('Erro no banco de dados:', dbError);
+      res.status(500).json({ message: 'Erro ao buscar dicionário.' });
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error('Erro geral no servidor:', error);
+    res.status(500).json({ message: 'Erro no servidor' });
+  }
+});
+
+// --- Rota Toggle Favorite ---
+app.post('/dictionary/favorite', authMiddleware, async (req, res) => {
+  const userId = req.user.id;
+  const { sign_id } = req.body;
+
+  if (!sign_id) return res.status(400).json({ message: 'sign_id é obrigatório.' });
+
+  try {
+    const client = await pool.connect();
+    try {
+      const check = await client.query('SELECT 1 FROM favorite_signs WHERE user_id = $1 AND sign_id = $2', [userId, sign_id]);
+      if (check.rows.length > 0) {
+        await client.query('DELETE FROM favorite_signs WHERE user_id = $1 AND sign_id = $2', [userId, sign_id]);
+        res.status(200).json({ is_favorite: false });
+      } else {
+        await client.query('INSERT INTO favorite_signs (user_id, sign_id) VALUES ($1, $2)', [userId, sign_id]);
+        res.status(201).json({ is_favorite: true });
+      }
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error('Erro no favorite:', error);
+    res.status(500).json({ message: 'Erro ao processar favorito.' });
+  }
+});
+
 // --- Rota de Perfil com Pontuação ---
 app.get('/users/me', authMiddleware, async (req, res) => {
   try {
@@ -141,12 +176,12 @@ app.get('/users/me', authMiddleware, async (req, res) => {
     try {
       const result = await client.query(`
         SELECT 
-          u.id, u.name, u.email, u.created_at,
-          COALESCE(SUM(p.score), 0) as total_score
+          u.id, u.name, u.email, u.created_at, u.profile_picture, u.streak_count, u.last_practice_date,
+          (COALESCE(SUM(p.score), 0) + COALESCE((SELECT SUM(score) FROM quiz_progress qp WHERE qp.user_id = u.id), 0)) as total_score
         FROM users u
         LEFT JOIN progress p ON u.id = p.user_id
         WHERE u.id = $1
-        GROUP BY u.id, u.name, u.email, u.created_at
+        GROUP BY u.id, u.name, u.email, u.created_at, u.profile_picture, u.streak_count, u.last_practice_date
       `, [userId]);
 
       if (result.rows.length === 0) {
@@ -155,6 +190,21 @@ app.get('/users/me', authMiddleware, async (req, res) => {
 
       const user = result.rows[0];
       user.total_score = parseInt(user.total_score); // Garante número
+      
+      // Verifica se a ofensiva expirou
+      let currentStreak = user.streak_count || 0;
+      if (user.last_practice_date) {
+        const now = new Date();
+        const lastPractice = new Date(user.last_practice_date);
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const lastDay = new Date(lastPractice.getFullYear(), lastPractice.getMonth(), lastPractice.getDate());
+        const diffDays = Math.round((today - lastDay) / (1000 * 60 * 60 * 24));
+        
+        if (diffDays > 1) {
+          currentStreak = 0; // Se passou de ontem e não treinou, zera no visual
+        }
+      }
+      user.streak_count = currentStreak;
 
       res.status(200).json(user);
 
@@ -205,20 +255,55 @@ app.post('/progress', authMiddleware, async (req, res) => {
   try {
     client = await pool.connect();
     
-    const result = await client.query(
-      'INSERT INTO progress (user_id, lesson_id, score) VALUES ($1, $2, $3) RETURNING id',
-      [userId, lesson_id, finalScore]
-    );
-    
-    return res.status(201).json({ 
-      message: `Progresso salvo! Você ganhou ${finalScore} pontos!`, 
-      progressId: result.rows[0].id 
-    });
+    // Atualiza a ofensiva
+    const userRes = await client.query('SELECT streak_count, last_practice_date FROM users WHERE id = $1', [userId]);
+    let currentStreak = 0;
+    if (userRes.rows.length > 0) {
+      const user = userRes.rows[0];
+      const now = new Date();
+      const lastPractice = user.last_practice_date ? new Date(user.last_practice_date) : null;
+      
+      currentStreak = user.streak_count || 0;
+
+      if (!lastPractice) {
+        currentStreak = 1;
+      } else {
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const lastDay = new Date(lastPractice.getFullYear(), lastPractice.getMonth(), lastPractice.getDate());
+        const diffDays = Math.round((today - lastDay) / (1000 * 60 * 60 * 24));
+        
+        if (diffDays === 1) {
+          currentStreak += 1;
+        } else if (diffDays > 1) {
+          currentStreak = 1;
+        }
+      }
+      await client.query('UPDATE users SET streak_count = $1, last_practice_date = $2 WHERE id = $3', [currentStreak, now, userId]);
+    }
+
+    try {
+      const result = await client.query(
+        'INSERT INTO progress (user_id, lesson_id, score) VALUES ($1, $2, $3) RETURNING id',
+        [userId, lesson_id, finalScore]
+      );
+      
+      return res.status(201).json({ 
+        message: `Progresso salvo! Você ganhou ${finalScore} pontos!`, 
+        progressId: result.rows[0].id,
+        streak_count: currentStreak
+      });
+    } catch (insertError) {
+      if (insertError.code === '23505') {
+        // Já completou, mas ofensiva foi salva!
+        return res.status(200).json({ 
+          message: 'Você já concluiu esta lição. Ofensiva atualizada!',
+          streak_count: currentStreak 
+        });
+      }
+      throw insertError;
+    }
 
   } catch (error) {
-    if (error.code === '23505') {
-      return res.status(409).json({ message: 'Este progresso já foi salvo anteriormente.' });
-    }
     console.error('Erro na rota /progress:', error);
     if (!res.headersSent) {
       return res.status(500).json({ message: 'Erro ao salvar progresso.' });
@@ -227,6 +312,60 @@ app.post('/progress', authMiddleware, async (req, res) => {
     if (client) {
       client.release();
     }
+  }
+});
+
+// --- Rota de Quiz Progress ---
+app.post('/quiz/progress', authMiddleware, async (req, res) => {
+  const userId = req.user.id;
+  const { score } = req.body;
+  const finalScore = score || 5;
+  let client;
+  try {
+    client = await pool.connect();
+    
+    // Atualiza ofensiva
+    const userRes = await client.query('SELECT streak_count, last_practice_date FROM users WHERE id = $1', [userId]);
+    let currentStreak = 0;
+    if (userRes.rows.length > 0) {
+      const user = userRes.rows[0];
+      const now = new Date();
+      const lastPractice = user.last_practice_date ? new Date(user.last_practice_date) : null;
+      
+      currentStreak = user.streak_count || 0;
+      if (!lastPractice) {
+        currentStreak = 1;
+      } else {
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const lastDay = new Date(lastPractice.getFullYear(), lastPractice.getMonth(), lastPractice.getDate());
+        const diffDays = Math.round((today - lastDay) / (1000 * 60 * 60 * 24));
+        
+        if (diffDays === 1) {
+          currentStreak += 1;
+        } else if (diffDays > 1) {
+          currentStreak = 1;
+        }
+      }
+      await client.query('UPDATE users SET streak_count = $1, last_practice_date = $2 WHERE id = $3', [currentStreak, now, userId]);
+    }
+
+    await client.query(
+      'INSERT INTO quiz_progress (user_id, score) VALUES ($1, $2)',
+      [userId, finalScore]
+    );
+    
+    return res.status(201).json({ 
+      message: `Progresso de quiz salvo! Você ganhou ${finalScore} pontos!`,
+      streak_count: currentStreak
+    });
+
+  } catch (error) {
+    console.error('Erro na rota /quiz/progress:', error);
+    if (!res.headersSent) {
+      return res.status(500).json({ message: 'Erro ao salvar quiz.' });
+    }
+  } finally {
+    if (client) client.release();
   }
 });
 
@@ -239,10 +378,11 @@ app.get('/ranking', authMiddleware, async (req, res) => {
       const result = await client.query(`
         SELECT 
           u.name, 
-          COALESCE(SUM(p.score), 0)::int as total_score
+          u.profile_picture,
+          (COALESCE(SUM(p.score), 0) + COALESCE((SELECT SUM(score) FROM quiz_progress qp WHERE qp.user_id = u.id), 0))::int as total_score
         FROM users u
         LEFT JOIN progress p ON u.id = p.user_id
-        GROUP BY u.id, u.name
+        GROUP BY u.id, u.name, u.profile_picture
         ORDER BY total_score DESC
         LIMIT 50
       `);
@@ -379,7 +519,7 @@ app.post('/users/login', async (req, res) => {
 
 app.put('/users/me', authMiddleware, async (req, res) => {
   const userId = req.user.id;
-  const { name, password } = req.body;
+  const { name, password, profile_picture } = req.body;
 
   try {
     const client = await pool.connect();
@@ -401,6 +541,12 @@ app.put('/users/me', authMiddleware, async (req, res) => {
         const passwordHash = await bcrypt.hash(password, salt);
         fields.push(`password_hash = $${paramCount}`);
         values.push(passwordHash);
+        paramCount++;
+      }
+
+      if (profile_picture) {
+        fields.push(`profile_picture = $${paramCount}`);
+        values.push(profile_picture);
         paramCount++;
       }
 
