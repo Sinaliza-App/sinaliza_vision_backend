@@ -1,5 +1,0 @@
-# Dependências do Node
-node_modules/
-
-# Arquivos de ambiente com senhas
-.env
