@@ -12,6 +12,9 @@ import json
 import base64
 from collections import deque, Counter
 from datetime import datetime
+import torch
+import torch.nn as nn
+import mediapipe as mp
 
 # Tenta importar o YOLO
 try:
@@ -24,8 +27,41 @@ except ImportError:
 # ============================
 # 🔧 CONFIGURAÇÕES GERAIS
 # ============================
-CONFIDENCE = 0.60  # Confiança mínima para considerar um acerto
+CONFIDENCE = 0.60  # Confiança mínima para YOLO
+CONFIDENCE_LSTM = 0.55 # Confiança mínima para LSTM (31 classes)
 PORTA_SERVIDOR = 8080
+
+# ============================
+# 🧠 ARQUITETURA LSTM
+# ============================
+class ClassificadorLSTMLibras(nn.Module):
+    def __init__(self, input_size, hidden_size, num_classes):
+        super(ClassificadorLSTMLibras, self).__init__()
+        self.hidden_size = hidden_size
+        self.num_layers = 2
+        self.lstm = nn.LSTM(
+            input_size, 
+            hidden_size, 
+            num_layers=self.num_layers, 
+            batch_first=True, 
+            dropout=0.3
+        )
+        self.fc = nn.Sequential(
+            nn.Linear(hidden_size, 128),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(128, num_classes)
+        )
+        
+    def forward(self, x):
+        h0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size).to(x.device)
+        c0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size).to(x.device)
+        out, _ = self.lstm(x, (h0, c0))
+        out = self.fc(out[:, -1, :])
+        return out
+
+# Classes treinadas no LSTM (ordem alfabética, idêntica ao treinamento)
+CLASSES_LSTM = ['amar', 'amarelo', 'aprender', 'azul', 'beber', 'bem_vindo', 'boa_noite', 'boa_tarde', 'bom_dia', 'branco', 'brincar_jogar', 'cachorro', 'cavalo', 'cinza', 'coelho', 'comer', 'comprar', 'estudar', 'gato', 'gostar', 'macaco', 'obrigado', 'oi', 'pedir_ajuda', 'preto', 'querer', 'trabalhar', 'tudo_bem', 'urso', 'verde', 'vermelho']
 
 class DetectorLibras:
     """Classe responsável por carregar o modelo e fazer a inferência."""
@@ -132,6 +168,100 @@ class DetectorLibras:
             
         return None, 0.0
 
+class DetectorLibrasMovimento:
+    """Classe responsável por detectar gestos dinâmicos usando MediaPipe e PyTorch LSTM."""
+    
+    def __init__(self, model_path):
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        self.path_modelo = os.path.join(base_dir, model_path)
+        self.carregado = False
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        
+        self.num_features = 258 # Sem rosto, baseado no seu testar_lstm.py
+        self.num_frames = 30
+        self.buffer = deque(maxlen=self.num_frames)
+        self.historico_predicoes = deque(maxlen=5)
+        
+        # Inicia MediaPipe Holistic
+        self.mp_holistic = mp.solutions.holistic
+        self.holistic = self.mp_holistic.Holistic(min_detection_confidence=0.5, min_tracking_confidence=0.5)
+        
+        self.carregar_modelo()
+        
+    def carregar_modelo(self):
+        try:
+            print(f"\n🧠 Carregando modelo LSTM de Movimento...")
+            if not os.path.exists(self.path_modelo):
+                print(f"❌ ERRO: Modelo '{self.path_modelo}' não encontrado!")
+                return
+                
+            num_classes = len(CLASSES_LSTM)
+            self.modelo = ClassificadorLSTMLibras(self.num_features, 128, num_classes).to(self.device)
+            self.modelo.load_state_dict(torch.load(self.path_modelo, map_location=self.device))
+            self.modelo.eval()
+            self.carregado = True
+            
+            print(f"✅ Modelo LSTM carregado com sucesso (Device: {self.device})!")
+            print(f"   -> {num_classes} Gestos Suportados.\n")
+        except Exception as e:
+            print(f"❌ Erro ao carregar LSTM: {e}")
+            self.carregado = False
+
+    def extrair_keypoints(self, results):
+        pose = np.array([[res.x, res.y, res.z, res.visibility] for res in results.pose_landmarks.landmark]).flatten() if results.pose_landmarks else np.zeros(33*4)
+        mao_esq = np.array([[res.x, res.y, res.z] for res in results.left_hand_landmarks.landmark]).flatten() if results.left_hand_landmarks else np.zeros(21*3)
+        mao_dir = np.array([[res.x, res.y, res.z] for res in results.right_hand_landmarks.landmark]).flatten() if results.right_hand_landmarks else np.zeros(21*3)
+        return np.concatenate([pose, mao_esq, mao_dir])
+            
+    def processar_imagem(self, image):
+        if not self.carregado: return None, 0.0
+        
+        # Converte a imagem BGR (OpenCV) para RGB (MediaPipe)
+        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        image_rgb.flags.writeable = False
+        results = self.holistic.process(image_rgb)
+        
+        keypoints = self.extrair_keypoints(results)
+        self.buffer.append(keypoints)
+        
+        # Só prevê se tiver 30 frames no buffer
+        if len(self.buffer) == self.num_frames:
+            res_tensor = torch.tensor(np.array(self.buffer), dtype=torch.float32).unsqueeze(0).to(self.device)
+            
+            with torch.no_grad():
+                pred = self.modelo(res_tensor)
+                probs = torch.softmax(pred, dim=1)
+                conf = torch.max(probs).item()
+                idx = torch.argmax(probs).item()
+                
+            if conf > CONFIDENCE_LSTM:
+                return CLASSES_LSTM[idx], conf
+                
+        return None, 0.0
+        
+    def obter_gesto_suavizado(self, gesto_atual, confianca, is_movement=True):
+        if gesto_atual:
+            self.historico_predicoes.append(gesto_atual)
+        else:
+            self.historico_predicoes.append(None)
+            
+        if len(self.historico_predicoes) < 3:
+            return None, 0.0
+            
+        contador = Counter(self.historico_predicoes)
+        if None in contador:
+            del contador[None]
+            
+        if not contador:
+            return None, 0.0
+            
+        gesto_comum, freq = contador.most_common(1)[0]
+        # Suavização para movimento: maioria simples dos ultimos 5 frames
+        if freq / len(self.historico_predicoes) >= 0.4:
+            return gesto_comum, confianca
+            
+        return None, 0.0
+
 # ===================================================================
 # SERVIDOR WEBSOCKET (Lógica de Conexão)
 # ===================================================================
@@ -226,9 +356,8 @@ async def main():
     print("Carregando IA do Alfabeto...")
     detector_alfabeto = DetectorLibras("runs_novo/libras_fsl/weights/best.pt")
     
-    print("Preparando slot para IA de Movimento...")
-    # Quando o modelo estiver pronto, substitua None pelo caminho do arquivo. Ex: DetectorLibras("movimento.pt")
-    detector_movimento = None 
+    print("Preparando IA de Movimento (LSTM)...")
+    detector_movimento = DetectorLibrasMovimento("modelo_lstm_libras.pth")
     
     if not detector_alfabeto.carregado:
         print("Encerrando servidor por falta do modelo principal (Alfabeto).")
