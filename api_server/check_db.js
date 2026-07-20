@@ -6,7 +6,7 @@ const pool = new Pool({
   host: process.env.DB_HOST,
   database: process.env.DB_DATABASE,
   password: process.env.DB_PASSWORD,
-  port: 5432,
+  port: process.env.DB_PORT || 5432,
 });
 
 (async () => {
@@ -21,6 +21,9 @@ const pool = new Pool({
 
       await client.query('ALTER TABLE lessons ADD COLUMN IF NOT EXISTS gif_url TEXT;');
       console.log('Coluna gif_url garantida na tabela lessons com sucesso.');
+
+      await client.query("ALTER TABLE lessons ADD COLUMN IF NOT EXISTS type VARCHAR(50) DEFAULT 'estatico';");
+      console.log('Coluna type garantida na tabela lessons com sucesso.');
     } catch(e) {
       console.log('Erro ao adicionar coluna:', e);
     } finally {
