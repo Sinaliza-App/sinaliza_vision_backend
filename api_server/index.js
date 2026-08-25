@@ -429,6 +429,54 @@ app.get('/ranking', authMiddleware, async (req, res) => {
   }
 });
 
+// --- Rota Admin: Listar Todos os Usuários ---
+app.get('/admin/users', authMiddleware, async (req, res) => {
+  try {
+    const client = await pool.connect();
+    try {
+      const result = await client.query(`
+        SELECT 
+          id, 
+          name, 
+          email, 
+          created_at, 
+          profile_picture, 
+          streak_count, 
+          last_practice_date 
+        FROM users 
+        ORDER BY created_at DESC
+      `);
+      res.status(200).json(result.rows);
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error('Erro ao listar usuários:', error);
+    res.status(500).json({ message: 'Erro ao listar usuários.' });
+  }
+});
+
+// --- Rota Admin: Excluir Usuário (Banir) ---
+app.delete('/admin/users/:id', authMiddleware, async (req, res) => {
+  const userIdToDelete = req.params.id;
+  try {
+    const client = await pool.connect();
+    try {
+      // Deleta usuário (progresso é apagado por CASCADE no banco)
+      const result = await client.query('DELETE FROM users WHERE id = $1 RETURNING id', [userIdToDelete]);
+      if (result.rowCount === 0) {
+        return res.status(404).json({ message: 'Usuário não encontrado.' });
+      }
+      res.status(200).json({ message: 'Usuário excluído com sucesso.' });
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error('Erro ao excluir usuário:', error);
+    res.status(500).json({ message: 'Erro ao excluir usuário.' });
+  }
+});
+
 // --- Rota Admin: Estatísticas Globais do Dashboard ---
 app.get('/admin/stats', authMiddleware, async (req, res) => {
   try {
@@ -436,13 +484,16 @@ app.get('/admin/stats', authMiddleware, async (req, res) => {
     try {
       const totalUsersRes = await client.query('SELECT COUNT(*) as count FROM users');
       const activeUsersRes = await client.query('SELECT COUNT(*) as count FROM users WHERE last_practice_date >= CURRENT_DATE - INTERVAL \'1 day\'');
+      const streaksRes = await client.query('SELECT COUNT(*) as count FROM users WHERE streak_count > 0');
       
       const totalUsers = parseInt(totalUsersRes.rows[0].count);
       const accessesToday = parseInt(activeUsersRes.rows[0].count);
+      const totalStreaks = parseInt(streaksRes.rows[0].count);
       
       res.status(200).json({
         total_users: totalUsers,
-        accesses_today: accessesToday
+        accesses_today: accessesToday,
+        total_streaks: totalStreaks
       });
     } finally {
       client.release();
