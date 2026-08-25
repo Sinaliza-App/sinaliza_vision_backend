@@ -429,6 +429,30 @@ app.get('/ranking', authMiddleware, async (req, res) => {
   }
 });
 
+// --- Rota Admin: Estatísticas Globais do Dashboard ---
+app.get('/admin/stats', authMiddleware, async (req, res) => {
+  try {
+    const client = await pool.connect();
+    try {
+      const totalUsersRes = await client.query('SELECT COUNT(*) as count FROM users');
+      const activeUsersRes = await client.query('SELECT COUNT(*) as count FROM users WHERE last_practice_date >= CURRENT_DATE - INTERVAL \'1 day\'');
+      
+      const totalUsers = parseInt(totalUsersRes.rows[0].count);
+      const accessesToday = parseInt(activeUsersRes.rows[0].count);
+      
+      res.status(200).json({
+        total_users: totalUsers,
+        accesses_today: accessesToday
+      });
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error('Erro no admin stats:', error);
+    res.status(500).json({ message: 'Erro ao buscar estatísticas.' });
+  }
+});
+
 // --- Rota de Cadastro ---
 app.post('/users/register', async (req, res) => {
   try {
