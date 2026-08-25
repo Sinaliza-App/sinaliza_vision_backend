@@ -1,5 +1,10 @@
-const jwt = require('jsonwebtoken');
+const { createClient } = require('@supabase/supabase-js');
 const pool = require('./db');
+
+const supabase = createClient(
+  process.env.VITE_SUPABASE_URL,
+  process.env.VITE_SUPABASE_ANON_KEY
+);
 
 const authMiddleware = async (req, res, next) => {
   const authHeader = req.headers['authorization'];
@@ -10,18 +15,15 @@ const authMiddleware = async (req, res, next) => {
   }
 
   try {
-    // IMPORTANTE: Agora usamos a chave secreta JWT do Supabase, não a nossa antiga!
-    if (!process.env.SUPABASE_JWT_SECRET) {
-      console.error("FATAL: SUPABASE_JWT_SECRET não está definida no .env");
-      return res.status(500).json({ message: 'Erro de configuração do servidor.' });
-    }
-
-    // Supabase JWT secrets are base64 encoded, so we must decode it first.
-    const secret = Buffer.from(process.env.SUPABASE_JWT_SECRET, 'base64');
-    const payload = jwt.verify(token, secret, { algorithms: ['HS256'] });
+    const { data: { user }, error } = await supabase.auth.getUser(token);
     
-    // O payload.sub do Supabase contém o UUID do usuário em auth.users
-    const authId = payload.sub;
+    if (error || !user) {
+      console.error("Supabase Auth Error:", error?.message);
+      return res.status(401).json({ message: 'Token inválido ou expirado.' });
+    }
+    
+    // O payload do Supabase contém o UUID do usuário em auth.users
+    const authId = user.id;
 
     // Precisamos achar qual é o ID numérico deste usuário na NOSSA tabela public.users
     const client = await pool.connect();
