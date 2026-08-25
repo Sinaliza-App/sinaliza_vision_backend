@@ -19,13 +19,7 @@ const PORT = process.env.PORT || 3000;
 const swaggerDocument = YAML.load('./swagger.yaml');
 // ----------------------------------
 // --- Configuração do Banco de Dados ---
-const pool = new Pool({
-  user: process.env.DB_USER, // Seu usuário do banco
-  host: process.env.DB_HOST, // Usando 127.0.0.1 que resolveu o erro 'InitPostgres'
-  database: process.env.DB_DATABASE, // Seu nome do banco
-  password: process.env.DB_PASSWORD, // Sua senha confirmada
-  port: 5432,
-});
+const pool = require('./db');
 
 // --- Middlewares Essenciais ---
 app.use(cors()); // Permite que o Flutter acesse a API
@@ -504,125 +498,7 @@ app.get('/admin/stats', authMiddleware, async (req, res) => {
   }
 });
 
-// --- Rota de Cadastro ---
-app.post('/users/register', async (req, res) => {
-  try {
-    const { name, email, password } = req.body;
-
-    if (!name || !email || !password) {
-      return res.status(400).json({ message: 'Nome, e-mail e senha são obrigatórios.' });
-    }
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
-      return res.status(400).json({ message: 'Por favor, insira um e-mail válido (ex: nome@email.com).' });
-    }
-
-    // Aqui você pode adicionar a validação de senha forte se quiser
-
-    const salt = await bcrypt.genSalt(10);
-    const passwordHash = await bcrypt.hash(password, salt);
-
-    const client = await pool.connect();
-    try {
-      // Verifica email
-      const emailCheck = await client.query('SELECT * FROM users WHERE email = $1', [email]);
-      if (emailCheck.rows.length > 0) {
-        return res.status(409).json({ message: 'Este e-mail já está em uso.' });
-      }
-      
-      // Verifica nome
-      const nameCheck = await client.query('SELECT * FROM users WHERE name = $1', [name]);
-      if (nameCheck.rows.length > 0) {
-        return res.status(409).json({ message: 'Este nome de usuário já está em uso.' });
-      }
-
-      const result = await client.query(
-        'INSERT INTO users (name, email, password_hash) VALUES ($1, $2, $3) RETURNING id',
-        [name, email, passwordHash]
-      );
-      
-      const newUserId = result.rows[0].id;
-      
-      res.status(201).json({ 
-        message: 'Usuário cadastrado com sucesso!', 
-        userId: newUserId 
-      });
-
-    } catch (dbError) {
-      if (dbError.code === '23505') {
-         if (dbError.constraint === 'users_email_key') return res.status(409).json({ message: 'Este e-mail já está em uso.' });
-         if (dbError.constraint === 'users_name_unique') return res.status(409).json({ message: 'Este nome de usuário já está em uso.' });
-      }
-      console.error('Erro no banco de dados:', dbError);
-      res.status(500).json({ message: 'Erro ao salvar usuário no banco.' });
-    } finally {
-      client.release();
-    }
-    
-  } catch (error) {
-    console.error('Erro geral no servidor:', error);
-    res.status(500).json({ message: 'Erro no servidor' });
-  }
-});
-
-// --- Rota de Login ---
-app.post('/users/login', async (req, res) => {
-  try {
-    const { email, password } = req.body;
-
-    if (!email || !password) {
-      return res.status(400).json({ message: 'E-mail e senha são obrigatórios.' });
-    }
-
-    const client = await pool.connect();
-    try {
-      const result = await client.query('SELECT * FROM users WHERE email = $1', [email]);
-      
-      if (result.rows.length === 0) {
-        return res.status(401).json({ message: 'E-mail ou senha inválidos.' });
-      }
-
-      const user = result.rows[0];
-      const isPasswordCorrect = await bcrypt.compare(password, user.password_hash);
-
-      if (!isPasswordCorrect) {
-        return res.status(401).json({ message: 'E-mail ou senha inválidos.' });
-      }
-
-      const payload = {
-        id: user.id,
-        email: user.email,
-      };
-      
-      const token = jwt.sign(
-        payload, 
-        process.env.JWT_SECRET, 
-        { expiresIn: '1d' }
-      );
-
-      res.status(200).json({
-        message: 'Login bem-sucedido!',
-        token: token,
-        user: {
-          id: user.id,
-          name: user.name,
-          email: user.email,
-          profile_picture: user.profile_picture,
-        },
-      });
-
-    } catch (dbError) {
-      console.error('Erro no banco de dados:', dbError);
-      res.status(500).json({ message: 'Erro ao tentar logar usuário.' });
-    } finally {
-      client.release();
-    }
-
-  } catch (error) {
-    console.error('Erro geral no servidor:', error);
-    res.status(500).json({ message: 'Erro no servidor' });
-  }
-});
+// ROTAS DE LOGIN E REGISTER FORAM REMOVIDAS (Agora gerenciadas pelo Supabase Auth)
 
 app.put('/users/me', authMiddleware, async (req, res) => {
   const userId = req.user.id;
