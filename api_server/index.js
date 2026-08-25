@@ -170,12 +170,12 @@ app.get('/users/me', authMiddleware, async (req, res) => {
     try {
       const result = await client.query(`
         SELECT 
-          u.id, u.name, u.email, u.created_at, u.profile_picture, u.streak_count, u.last_practice_date,
+          u.id, u.name, u.email, u.created_at, u.profile_picture, u.streak_count, u.last_practice_date, u.is_admin,
           (COALESCE(SUM(p.score), 0) + COALESCE((SELECT SUM(score) FROM quiz_progress qp WHERE qp.user_id = u.id), 0)) as total_score
         FROM users u
         LEFT JOIN progress p ON u.id = p.user_id
         WHERE u.id = $1
-        GROUP BY u.id, u.name, u.email, u.created_at, u.profile_picture, u.streak_count, u.last_practice_date
+        GROUP BY u.id, u.name, u.email, u.created_at, u.profile_picture, u.streak_count, u.last_practice_date, u.is_admin
       `, [userId]);
 
       if (result.rows.length === 0) {
