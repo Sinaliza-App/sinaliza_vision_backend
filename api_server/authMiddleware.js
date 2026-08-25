@@ -16,7 +16,9 @@ const authMiddleware = async (req, res, next) => {
       return res.status(500).json({ message: 'Erro de configuração do servidor.' });
     }
 
-    const payload = jwt.verify(token, process.env.SUPABASE_JWT_SECRET);
+    // Supabase JWT secrets are base64 encoded, so we must decode it first.
+    const secret = Buffer.from(process.env.SUPABASE_JWT_SECRET, 'base64');
+    const payload = jwt.verify(token, secret, { algorithms: ['HS256'] });
     
     // O payload.sub do Supabase contém o UUID do usuário em auth.users
     const authId = payload.sub;
