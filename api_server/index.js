@@ -556,6 +556,7 @@ app.post('/users/login', async (req, res) => {
           id: user.id,
           name: user.name,
           email: user.email,
+          profile_picture: user.profile_picture,
         },
       });
 
