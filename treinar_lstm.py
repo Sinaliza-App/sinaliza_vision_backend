@@ -5,6 +5,9 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import TensorDataset, DataLoader, random_split
 import random
+import json
+from cv_utils import normalizar_vetor_keypoints
+from lstm_inference import ClassificadorLSTMLibras
 
 # Fixando sementes para estabilidade e reprodutibilidade do treino
 random.seed(42)
@@ -24,6 +27,7 @@ learning_rate = 0.0005    # Taxa de aprendizado reduzida para estabilizar a desc
 
 # --- 🚀 FLAGS DE SELEÇÃO DE RECURSOS ---
 COLETAR_ROSTO = False     # Mude para False para ignorar o rosto (258 features) e focar 100% nas mãos e pose.
+num_features = 1662 if COLETAR_ROSTO else 258
 
 # =====================================================================
 # 📂 CARREGAMENTO DOS DADOS (.npy)
@@ -74,10 +78,28 @@ for label in todas_classes:
         if os.path.exists(seq_path):
             res = np.load(seq_path)
             if len(res) == num_frames:
-                # Descarta pontos do rosto se COLETAR_ROSTO for False
-                if not COLETAR_ROSTO and res.shape[1] == 1662:
-                    res = np.concatenate([res[:, :132], res[:, 1536:]], axis=1)
-                window = res
+                # Auditoria de NaNs no arquivo carregado
+                if np.isnan(res).any():
+                    raise ValueError(f"[ERRO] NaN detectado na classe '{label}', vídeo {video} (Formato Sequência Unificada)")
+                
+                window_norm = []
+                for frame_idx, frame in enumerate(res):
+                    # Fatiamento se COLETAR_ROSTO for False
+                    if not COLETAR_ROSTO and frame.shape[0] == 1662:
+                        frame = np.concatenate([frame[:132], frame[1536:]])
+                    
+                    # Validar dimensionalidade
+                    assert frame.shape[0] == num_features, f"Tamanho inesperado do frame {frame_idx} no vídeo {video}: {frame.shape[0]}"
+                    
+                    # Normalizar
+                    frame_norm = normalizar_vetor_keypoints(frame, tem_rosto=COLETAR_ROSTO)
+                    
+                    # Validar saída da normalização
+                    assert not np.isnan(frame_norm).any(), f"NaN gerado após normalização no frame {frame_idx} do vídeo {video}"
+                    assert frame_norm.shape[0] == num_features, f"Tamanho inesperado pós-normalização no frame {frame_idx} do vídeo {video}"
+                    
+                    window_norm.append(frame_norm)
+                window = window_norm
             else:
                 video_completo = False
         else:
@@ -86,10 +108,26 @@ for label in todas_classes:
                 frame_path = os.path.join(class_dir, f'video_{video}_frame_{frame_num}.npy')
                 if os.path.exists(frame_path):
                     res = np.load(frame_path)
-                    # Descarta pontos do rosto se COLETAR_ROSTO for False
-                    if not COLETAR_ROSTO and len(res) == 1662:
+                    
+                    # Auditoria de NaNs no arquivo carregado
+                    if np.isnan(res).any():
+                        raise ValueError(f"[ERRO] NaN detectado na classe '{label}', vídeo {video}, frame {frame_num} (Formato Frames Separados)")
+                    
+                    # Fatiamento se COLETAR_ROSTO for False
+                    if not COLETAR_ROSTO and res.shape[0] == 1662:
                         res = np.concatenate([res[:132], res[1536:]])
-                    window.append(res)
+                    
+                    # Validar dimensionalidade
+                    assert res.shape[0] == num_features, f"Tamanho inesperado do frame {frame_num} no vídeo {video}: {res.shape[0]}"
+                    
+                    # Normalizar
+                    res_norm = normalizar_vetor_keypoints(res, tem_rosto=COLETAR_ROSTO)
+                    
+                    # Validar saída da normalização
+                    assert not np.isnan(res_norm).any(), f"NaN gerado após normalização no frame {frame_num} do vídeo {video}"
+                    assert res_norm.shape[0] == num_features, f"Tamanho inesperado pós-normalização no frame {frame_num} do vídeo {video}"
+                    
+                    window.append(res_norm)
                 else:
                     video_completo = False
                     break
@@ -135,45 +173,12 @@ print(f"   -> Amostras (Vídeos): {X.shape[0]}")
 print(f"   -> Duração (Frames): {X.shape[1]}")
 print(f"   -> Características por Frame (Features): {X.shape[2]}")
 
-num_features = X.shape[2]
+assert num_features == X.shape[2], f"Dimensão incorreta detectada: {X.shape[2]} vs {num_features}"
 
 # =====================================================================
 # 🧠 DEFINIÇÃO DA REDE NEURAL LSTM (CLASSIFICADOR SEQUENCIAL)
+# A classe ClassificadorLSTMLibras foi movida e é importada de lstm_inference.py
 # =====================================================================
-class ClassificadorLSTMLibras(nn.Module):
-    def __init__(self, input_size, hidden_size, num_classes):
-        super(ClassificadorLSTMLibras, self).__init__()
-        self.hidden_size = hidden_size
-        self.num_layers = 2
-        
-        # Camada LSTM padrão (Unidirecional)
-        self.lstm = nn.LSTM(
-            input_size, 
-            hidden_size, 
-            num_layers=self.num_layers, 
-            batch_first=True, 
-            dropout=0.3
-        )
-        
-        # Camada de Classificação Linear (Dense + ReLU + Dropout + Output)
-        self.fc = nn.Sequential(
-            nn.Linear(hidden_size, 128),
-            nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.Linear(128, num_classes)
-        )
-        
-    def forward(self, x):
-        # Inicializa o estado oculto (h0) e celular (c0) da LSTM
-        h0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size).to(x.device)
-        c0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size).to(x.device)
-        
-        # Passa pela LSTM
-        out, _ = self.lstm(x, (h0, c0))
-        
-        # Pega apenas a saída do ÚLTIMO frame da sequência (out[:, -1, :])
-        out = self.fc(out[:, -1, :])
-        return out
 
 # =====================================================================
 # 🔀 DIVISÃO DE TREINO E VALIDAÇÃO (80% / 20%)
@@ -284,7 +289,7 @@ for epoch in range(epochs):
         print(f"Época [{epoch+1}/{epochs}] -> Loss Treino: {epoch_loss:.4f} | Acc Treino: {epoch_acc:.2f}%{val_info}")
 
 # =====================================================================
-# 💾 SALVAR OS PESOS DO MELHOR MODELO DETECTADO
+# 💾 SALVAR OS PESOS DO MELHOR MODELO E MAPA DE CLASSES
 # =====================================================================
 if best_model_state is not None:
     torch.save(best_model_state, 'modelo_lstm_libras.pth')
@@ -292,4 +297,11 @@ if best_model_state is not None:
 else:
     torch.save(model.state_dict(), 'modelo_lstm_libras.pth')
     print("\n[OK] Modelo treinado e salvo com sucesso em 'modelo_lstm_libras.pth'!")
+
+# Salva o arquivo de mapeamento de classes persistente class_map_lstm.json
+inverse_class_map = {str(idx): label for label, idx in class_map.items()}
+with open('class_map_lstm.json', 'w', encoding='utf-8') as f:
+    json.dump(inverse_class_map, f, indent=2, ensure_ascii=False)
+print("[OK] Mapeamento de classes salvo com sucesso em 'class_map_lstm.json'!")
+
 print("[OK] Treinamento concluído!")

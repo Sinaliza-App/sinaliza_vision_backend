@@ -3,21 +3,31 @@ import cv2
 import numpy as np
 import os
 import mediapipe as mp
+from cv_utils import extrair_keypoints, normalizar_vetor_keypoints
 
 # =====================================================================
 # 🔧 CONFIGURAÇÕES DO USUÁRIO
 # =====================================================================
 DATA_PATH = os.path.join('dataset') 
-sinais = np.array(['bom_dia', 'boa_tarde', 'comer', 'beber', 'pedir_ajuda', 'boa_noite', 'oi', 'tudo_bem', 'obrigado', 'bem_vindo', 'azul', 'amarelo', 'vermelho', 'preto', 'verde', 'cinza', 'branco', 'cachorro', 'gato', 'coelho', 'urso', 'macaco', 'cavalo', 'aprender', 'querer', 'amar', 'trabalhar', 'brincar_jogar', 'comprar', 'estudar', 'gostar'])
+
+# --- 🚀 MODO DE OPERAÇÃO: ALFABETO OU EXPRESSÕES ---
+MODO_ALFABETO = True       # True para coletar Letras (A-Z e Ç), False para Expressões Dinâmicas (bom_dia, comer, etc.)
+
+if MODO_ALFABETO:
+    sinais = np.array(['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', 'C_CEDILHA'])
+    num_frames = 20        # Ajustado para 20 frames para capturar o movimento das letras dinâmicas de forma natural
+else:
+    sinais = np.array(['bom_dia', 'boa_tarde', 'comer', 'beber', 'pedir_ajuda', 'boa_noite', 'oi', 'tudo_bem', 'obrigado', 'bem_vindo', 'azul', 'amarelo', 'vermelho', 'preto', 'verde', 'cinza', 'branco', 'cachorro', 'gato', 'coelho', 'urso', 'macaco', 'cavalo', 'aprender', 'querer', 'amar', 'trabalhar', 'brincar_jogar', 'comprar', 'estudar', 'gostar'])
+    num_frames = 30        # 30 frames por repetição para sinais dinâmicos
+
 VIDEO_INICIAL = 0         # ID inicial do vídeo (mude se for coletar em grupo para evitar apagar arquivos dos outros)
 num_videos = 30           # Quantidade de repetições por sinal
-num_frames = 30           # Quantidade de frames por repetição
 CAMERA_INDEX = 0          # Índice da câmera (normalmente 0)
 RESOLUCAO = (640, 480)    # Resolução desejada da câmera (Largura, Altura)
 
-# --- 🚀 FLAGS DE OTIMIZAÇÃO (Se alteradas, podem afetar a compatibilidade do seu dataset atual) ---
-COLETAR_ROSTO = True       # Mantido True para compatibilidade. Mude para False se quiser acelerar o treino (desativa Face Mesh)
-SALVAR_COMO_SEQUENCIA = False # Mantido False para compatibilidade (salva 1 arquivo por frame). Mude para True para salvar 1 arquivo por vídeo
+# --- 🚀 FLAGS DE OTIMIZAÇÃO ---
+COLETAR_ROSTO = False      # Mude para False para ignorar o rosto (258 features) e focar 100% nas mãos e pose.
+SALVAR_COMO_SEQUENCIA = True # Mapeia como sequência para manter o diretório do dataset limpo e organizado
 # =====================================================================
 
 # Criar as pastas automaticamente
@@ -30,16 +40,7 @@ for sinal in sinais:
 mp_holistic = mp.solutions.holistic
 mp_drawing = mp.solutions.drawing_utils
 
-def extrair_keypoints(results, coletar_rosto=True):
-    pose = np.array([[res.x, res.y, res.z, res.visibility] for res in results.pose_landmarks.landmark]).flatten() if results.pose_landmarks else np.zeros(33*4)
-    mao_esq = np.array([[res.x, res.y, res.z] for res in results.left_hand_landmarks.landmark]).flatten() if results.left_hand_landmarks else np.zeros(21*3)
-    mao_dir = np.array([[res.x, res.y, res.z] for res in results.right_hand_landmarks.landmark]).flatten() if results.right_hand_landmarks else np.zeros(21*3)
-    
-    if coletar_rosto:
-        face = np.array([[res.x, res.y, res.z] for res in results.face_landmarks.landmark]).flatten() if results.face_landmarks else np.zeros(468*3)
-        return np.concatenate([pose, face, mao_esq, mao_dir])
-    else:
-        return np.concatenate([pose, mao_esq, mao_dir])
+# Função extrair_keypoints importada de cv_utils.py
 
 # =====================================================================
 # 🎥 LOOP DE CAPTURA
@@ -69,6 +70,43 @@ if not cap.isOpened():
 
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, RESOLUCAO[0])
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, RESOLUCAO[1])
+
+def loop_pausado(cap, holistic):
+    print("\n⏸️ Gravação pausada. Pressione [ESPAÇO] ou [P] para continuar...")
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        frame = cv2.flip(frame, 1)
+        h, w, _ = frame.shape
+        
+        # Processa para mostrar o esqueleto na tela enquanto estiver pausado (feedback visual)
+        image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        image.flags.writeable = False
+        results = holistic.process(image)
+        image.flags.writeable = True
+        frame = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+        
+        if results.left_hand_landmarks: 
+            mp_drawing.draw_landmarks(frame, results.left_hand_landmarks, mp_holistic.HAND_CONNECTIONS)
+        if results.right_hand_landmarks: 
+            mp_drawing.draw_landmarks(frame, results.right_hand_landmarks, mp_holistic.HAND_CONNECTIONS)
+            
+        # Desenha o overlay de Pausa
+        cv2.putText(frame, "PAUSADO", (int(w*0.35), int(h*0.4)), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 3, cv2.LINE_AA)
+        cv2.putText(frame, "Pressione [ESPACO] ou [P] para continuar", (int(w*0.1), int(h*0.55)), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
+        cv2.putText(frame, "[Q] Sair", (int(w*0.42), int(h*0.65)), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1, cv2.LINE_AA)
+        
+        cv2.imshow('Coleta de Dados - Sinaliza App', frame)
+        key = cv2.waitKey(1) & 0xFF
+        if key == ord(' ') or key == ord('p'):
+            print("▶️ Retomando gravação...")
+            break
+        elif key == ord('q'):
+            raise KeyboardInterrupt
 
 try:
     with mp_holistic.Holistic(min_detection_confidence=0.5, min_tracking_confidence=0.5) as holistic:
@@ -110,10 +148,15 @@ try:
                                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,255,255), 2, cv2.LINE_AA)
                     cv2.putText(frame, f'Tentativa #{video} iniciando...', (int(w*0.1), int(h*0.5)), 
                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,255), 1, cv2.LINE_AA)
+                    cv2.putText(frame, "[Espaco/P] Pausar  |  [Q] Sair", (15, h - 20), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 1, cv2.LINE_AA)
                     
                     cv2.imshow('Coleta de Dados - Sinaliza App', frame)
-                    if cv2.waitKey(1) & 0xFF == ord('q'):
+                    key = cv2.waitKey(1) & 0xFF
+                    if key == ord('q'):
                         raise KeyboardInterrupt
+                    elif key == ord(' ') or key == ord('p'):
+                        loop_pausado(cap, holistic)
 
                 # --- 🔴 GRAVAÇÃO REAL DO SINAL ---
                 sequence_keypoints = []
@@ -145,18 +188,20 @@ try:
                     # Textos e orientações
                     cv2.putText(frame, f'GRAVANDO: {sinal.upper()} | F:{frame_num}/{num_frames}', (15, 30), 
                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,0,255), 2, cv2.LINE_AA)
-                    cv2.putText(frame, "[R] Refazer  |  [Q] Sair", (15, h - 20), 
+                    cv2.putText(frame, "[R] Refazer  |  [Espaco/P] Pausar  |  [Q] Sair", (15, h - 20), 
                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 1, cv2.LINE_AA)
                     
                     cv2.imshow('Coleta de Dados - Sinaliza App', frame)
 
-                    # Extrair keypoints
+                    # Extrair e normalizar keypoints
                     keypoints = extrair_keypoints(results, coletar_rosto=COLETAR_ROSTO)
+                    keypoints_norm = normalizar_vetor_keypoints(keypoints, tem_rosto=COLETAR_ROSTO)
+                    
                     if SALVAR_COMO_SEQUENCIA:
-                        sequence_keypoints.append(keypoints)
+                        sequence_keypoints.append(keypoints_norm)
                     else:
                         npy_path = os.path.join(DATA_PATH, sinal, f'video_{video}_frame_{frame_num}.npy')
-                        np.save(npy_path, keypoints)
+                        np.save(npy_path, keypoints_norm)
 
                     # Capturar teclas de atalho
                     key = cv2.waitKey(1) & 0xFF
@@ -165,6 +210,11 @@ try:
                     elif key == ord('r'):
                         print(f"🔄 Cancelando tentativa {video} a pedido do usuário. Reiniciando-a...")
                         refazer_tentativa = True
+                        break
+                    elif key == ord(' ') or key == ord('p'):
+                        print(f"🔄 Gravação interrompida para pausa. A tentativa {video} será descartada e reiniciada ao retomar.")
+                        refazer_tentativa = True
+                        loop_pausado(cap, holistic)
                         break
 
                 if refazer_tentativa:
