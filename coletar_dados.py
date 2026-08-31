@@ -6,9 +6,12 @@ import mediapipe as mp
 from cv_utils import extrair_keypoints, normalizar_vetor_keypoints
 
 # =====================================================================
-# 🔧 CONFIGURAÇÕES DO USUÁRIO
-# =====================================================================
-DATA_PATH = os.path.join('dataset') 
+import argparse
+parser = argparse.ArgumentParser(description="Coletor de Dados para o Sinaliza App")
+parser.add_argument("--version", type=str, default="v1", help="Versão do dataset de treinamento de destino (padrão: v1)")
+args = parser.parse_known_args()[0]
+
+DATA_PATH = os.path.join('dataset', 'treinamento', args.version) 
 
 # --- 🚀 MODO DE OPERAÇÃO: ALFABETO OU EXPRESSÕES ---
 MODO_ALFABETO = True       # True para coletar Letras (A-Z e Ç), False para Expressões Dinâmicas (bom_dia, comer, etc.)

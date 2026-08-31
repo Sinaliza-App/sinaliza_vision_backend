@@ -17,7 +17,12 @@ if torch.cuda.is_available():
 # =====================================================================
 # 🔧 CONFIGURAÇÕES DO TREINAMENTO
 # =====================================================================
-DATA_PATH = 'dataset'
+import argparse
+parser = argparse.ArgumentParser(description="Treinamento do Modelo do Alfabeto do Sinaliza App")
+parser.add_argument("--version", type=str, default="v1", help="Versão do dataset para treinamento (padrão: v1)")
+args = parser.parse_known_args()[0]
+
+DATA_PATH = os.path.join('dataset', 'treinamento', args.version)
 epochs = 80
 batch_size = 16
 learning_rate = 0.001

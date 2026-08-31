@@ -33,9 +33,9 @@ Este documento descreve a divisão de tarefas (backlog) em 3 sprints de 15 dias 
 * **Meta da Sprint:** Tratar o dataset dinâmico antigo com a nova normalização, treinar o classificador LSTM para expressões e exportar ambos os modelos (Alfabeto e Expressões) para o formato universal ONNX.
 
 ### 📝 Backlog de Tarefas:
-* [ ] **Task 2.1: Conversão Retroativa do Dataset Dinâmico**
-  * *Descrição:* Desenvolver um script utilitário para aplicar a normalização geométrica nos arquivos `.npy` dinâmicos antigos já coletados.
-  * *Critério de Aceitação:* Todo o dataset antigo convertido sem necessidade de regravação.
+* [x] **Task 2.1: Estruturação do Dataset e Loop de Feedback (Autoaperfeiçoamento)**
+  * *Descrição:* Reestruturar o dataset em pastas de treinamento versionadas (`v1`, `v2`) e feedback (`bruto/processado/manifesto`), implementar o banco de dados SQLite de feedbacks (`database.py`), a API REST (`feedback_api.py`), o utilitário de curadoria (`curator.py`) e o script de promoção (`promover_dataset.py`).
+  * *Critério de Aceitação:* Armazenamento de keypoints brutos de feedback com banco SQLite, curadoria com remoção física de dados rejeitados, promoção imutável com atualização automática do `CHANGELOG.md` e suporte ao parâmetro de versão do dataset no treinamento.
 * [ ] **Task 2.2: Treino e Teste da LSTM de Sinais Dinâmicos**
   * *Descrição:* Rodar o [treinar_lstm.py](file:///c:/Users/Notebook/Documents/Sinaliza_vision_backend/treinar_lstm.py) com os dados dinâmicos normalizados e validar em tempo real usando o [testar_lstm.py](file:///c:/Users/Notebook/Documents/Sinaliza_vision_backend/testar_lstm.py).
   * *Critério de Aceitação:* Classificação precisa das expressões com o usuário em diferentes distâncias.
