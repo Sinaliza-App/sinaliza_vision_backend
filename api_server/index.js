@@ -50,6 +50,7 @@ app.get('/modules', authMiddleware, async (req, res) => {
           m.title, 
           m.description, 
           m.icon_name,
+          m.is_draft,
           COUNT(l.id)::int as total_lessons,
           COUNT(p.id)::int as completed_lessons
         FROM modules m
