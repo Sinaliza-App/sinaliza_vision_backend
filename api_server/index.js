@@ -53,8 +53,9 @@ app.get('/modules', authMiddleware, async (req, res) => {
           COUNT(l.id)::int as total_lessons,
           COUNT(p.id)::int as completed_lessons
         FROM modules m
-        LEFT JOIN lessons l ON m.id = l.module_id
+        LEFT JOIN lessons l ON m.id = l.module_id AND l.is_draft = false
         LEFT JOIN progress p ON l.id = p.lesson_id AND p.user_id = $1
+        WHERE m.is_draft = false OR (SELECT is_admin FROM users WHERE id = $1) = true
         GROUP BY m.id
         ORDER BY m.id ASC
       `, [userId]);
@@ -83,11 +84,11 @@ app.get('/lessons', authMiddleware, async (req, res) => {
   try {
     const client = await pool.connect();
     try {
-      let query = 'SELECT * FROM lessons';
-      let params = [];
+      let query = 'SELECT * FROM lessons WHERE (is_draft = false OR (SELECT is_admin FROM users WHERE id = $1) = true)';
+      let params = [req.user.id];
 
       if (module_id) {
-        query += ' WHERE module_id = $1';
+        query += ' AND module_id = $2';
         params.push(module_id);
       }
 
