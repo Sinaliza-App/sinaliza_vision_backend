@@ -9,3 +9,9 @@ dataset/
 # Env
 .env
 node_modules/
+
+# Flutter App Repo
+sinaliza_app_libras/
+
+# Web Dashboard Repo
+sinaliza_web_dashboard/

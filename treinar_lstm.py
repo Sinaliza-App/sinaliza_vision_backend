@@ -41,8 +41,9 @@ if not os.path.exists(DATA_PATH):
     print(f"[ERRO] A pasta '{DATA_PATH}' nao existe. Execute o coletar_dados.py primeiro.")
     exit(1)
 
-# Lista todas as possíveis classes de sinais
+# Lista todas as possíveis classes de sinais dinâmicos (ignora letras do alfabeto)
 todas_classes = [d for d in os.listdir(DATA_PATH) if os.path.isdir(os.path.join(DATA_PATH, d))]
+todas_classes = [c for c in todas_classes if not (len(c) == 1 or c == 'C_CEDILHA')]
 todas_classes.sort()
 
 X = []

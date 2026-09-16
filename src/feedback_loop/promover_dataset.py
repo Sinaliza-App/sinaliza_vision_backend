@@ -13,19 +13,20 @@ BASE_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 DATASET_PATH = os.path.join(BASE_PATH, "dataset")
 CHANGELOG_PATH = os.path.join(DATASET_PATH, "CHANGELOG.md")
 
-def promover(source_version, target_version):
+def promover(source_version="v1", target_version="v2"):
     source_dir = os.path.join(DATASET_PATH, "treinamento", source_version)
     target_dir = os.path.join(DATASET_PATH, "treinamento", target_version)
     
     # 1. Validações preliminares de diretórios
     if not os.path.exists(source_dir):
-        print(f"[ERRO] Versão de origem '{source_version}' não encontrada em: {source_dir}")
-        return
+        msg = f"Versão de origem '{source_version}' não encontrada em: {source_dir}"
+        print(f"[ERRO] {msg}")
+        return {"success": False, "error": msg}
         
     if os.path.exists(target_dir):
-        print(f"[ERRO] A versão de destino '{target_version}' já existe em: {target_dir}")
-        print("Para manter a imutabilidade das versões, escolha um nome diferente (ex: v1.1).")
-        return
+        msg = f"A versão de destino '{target_version}' já existe em: {target_dir}. Escolha um identificador diferente (ex: v1.1 ou v2)."
+        print(f"[ERRO] {msg}")
+        return {"success": False, "error": msg}
         
     print(f"\n[INFO] Promovendo dataset '{source_version}' -> '{target_version}'...")
     
@@ -35,8 +36,9 @@ def promover(source_version, target_version):
         shutil.copytree(source_dir, target_dir)
         print("   -> Cópia base concluída com sucesso.")
     except Exception as e:
-        print(f"[ERRO] Falha ao copiar base do dataset: {e}")
-        return
+        msg = f"Falha ao copiar base do dataset: {e}"
+        print(f"[ERRO] {msg}")
+        return {"success": False, "error": msg}
         
     # 3. Consulta as amostras validadas no banco de dados
     db = SessionLocal()
@@ -90,9 +92,17 @@ def promover(source_version, target_version):
                     
         # 4. Atualizar o CHANGELOG.md
         print("   -> Atualizando CHANGELOG.md...")
+        total_added = sum(len(paths) for paths in samples_by_class.values())
         escrever_changelog(target_version, source_version, samples_by_class)
         
         print(f"\n[OK] Versão '{target_version}' gerada com sucesso em: {target_dir}\n")
+        return {
+            "success": True,
+            "message": f"Dataset {target_version} promovido com sucesso a partir de {source_version}!",
+            "total_added": total_added,
+            "classes_updated": {cls: len(paths) for cls, paths in samples_by_class.items()},
+            "target_dir": target_dir
+        }
         
     finally:
         db.close()
