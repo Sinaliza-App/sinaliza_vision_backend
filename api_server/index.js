@@ -317,9 +317,9 @@ app.get('/quiz/status', authMiddleware, async (req, res) => {
   let client;
   try {
     client = await pool.connect();
-    // Check if the user already played today
+    // Check if the user already played today (filtra apenas quiz, ignorando desafios práticos)
     const checkRes = await client.query(
-      'SELECT id FROM quiz_progress WHERE user_id = $1 AND DATE(created_at) = CURRENT_DATE LIMIT 1',
+      "SELECT id FROM quiz_progress WHERE user_id = $1 AND (type = 'quiz' OR type IS NULL) AND DATE(created_at) = CURRENT_DATE LIMIT 1",
       [userId]
     );
     const alreadyPlayed = checkRes.rows.length > 0;
@@ -342,9 +342,9 @@ app.post('/quiz/progress', authMiddleware, async (req, res) => {
   try {
     client = await pool.connect();
     
-    // Check limit
+    // Check limit (apenas quiz)
     const checkRes = await client.query(
-      'SELECT id FROM quiz_progress WHERE user_id = $1 AND DATE(created_at) = CURRENT_DATE LIMIT 1',
+      "SELECT id FROM quiz_progress WHERE user_id = $1 AND (type = 'quiz' OR type IS NULL) AND DATE(created_at) = CURRENT_DATE LIMIT 1",
       [userId]
     );
     if (checkRes.rows.length > 0) {
@@ -377,7 +377,7 @@ app.post('/quiz/progress', authMiddleware, async (req, res) => {
     }
 
     await client.query(
-      'INSERT INTO quiz_progress (user_id, score) VALUES ($1, $2)',
+      "INSERT INTO quiz_progress (user_id, score, type) VALUES ($1, $2, 'quiz')",
       [userId, finalScore]
     );
     
@@ -430,10 +430,10 @@ app.post('/challenge/progress', authMiddleware, async (req, res) => {
       await client.query('UPDATE users SET streak_count = $1, last_practice_date = $2 WHERE id = $3', [currentStreak, now, userId]);
     }
 
-    // Salva pontuação para contar no ranking e perfil
+    // Salva pontuação para contar no ranking e perfil com type = 'challenge'
     await client.query(
-      'INSERT INTO quiz_progress (user_id, score) VALUES ($1, $2)',
-      [userId, finalScore]
+      "INSERT INTO quiz_progress (user_id, score, type, module_id) VALUES ($1, $2, 'challenge', $3)",
+      [userId, finalScore, module_id || null]
     );
 
     return res.status(201).json({
