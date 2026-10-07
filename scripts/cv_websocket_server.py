@@ -367,17 +367,23 @@ async def handler(websocket):
             )
 
             # 5. Prepara a resposta
+            landmarks_list = []
+            if hasattr(detector_ativo, 'buffer'):
+                landmarks_list = [x.tolist() if hasattr(x, 'tolist') else list(x) for x in detector_ativo.buffer]
+
             if gesto_final:
                 response = {
                     "prediction": gesto_final,
-                    "confidence": float(conf_final)
+                    "confidence": float(conf_final),
+                    "landmarks": landmarks_list
                 }
                 # Log simples no terminal para você acompanhar
                 print(f"🤟 Detectado: {gesto_final} ({conf_final:.2f})", end='\r')
             else:
                 response = {
                     "prediction": "Nenhum",
-                    "confidence": 0.0
+                    "confidence": 0.0,
+                    "landmarks": landmarks_list
                 }
             
             # 6. Envia de volta para o Flutter

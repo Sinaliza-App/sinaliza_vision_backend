@@ -28,8 +28,14 @@ async function migrate() {
         id SERIAL PRIMARY KEY,
         user_id integer NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
         score integer NOT NULL,
+        type VARCHAR(50) DEFAULT 'quiz',
+        module_id integer,
         created_at timestamp without time zone DEFAULT now()
       );
+    `);
+    await client.query(`
+      ALTER TABLE quiz_progress ADD COLUMN IF NOT EXISTS type VARCHAR(50) DEFAULT 'quiz';
+      ALTER TABLE quiz_progress ADD COLUMN IF NOT EXISTS module_id integer;
     `);
     console.log('Tabela quiz_progress verificada/criada com sucesso.');
 

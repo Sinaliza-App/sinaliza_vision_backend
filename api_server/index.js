@@ -19,13 +19,7 @@ const PORT = process.env.PORT || 3000;
 const swaggerDocument = YAML.load('./swagger.yaml');
 // ----------------------------------
 // --- Configuração do Banco de Dados ---
-const pool = new Pool({
-  user: process.env.DB_USER, // Seu usuário do banco
-  host: process.env.DB_HOST, // Usando 127.0.0.1 que resolveu o erro 'InitPostgres'
-  database: process.env.DB_DATABASE, // Seu nome do banco
-  password: process.env.DB_PASSWORD, // Sua senha confirmada
-  port: 5432,
-});
+const pool = require('./db');
 
 // --- Middlewares Essenciais ---
 app.use(cors()); // Permite que o Flutter acesse a API
@@ -56,11 +50,13 @@ app.get('/modules', authMiddleware, async (req, res) => {
           m.title, 
           m.description, 
           m.icon_name,
+          m.is_draft,
           COUNT(l.id)::int as total_lessons,
           COUNT(p.id)::int as completed_lessons
         FROM modules m
-        LEFT JOIN lessons l ON m.id = l.module_id
+        LEFT JOIN lessons l ON m.id = l.module_id AND l.is_draft = false
         LEFT JOIN progress p ON l.id = p.lesson_id AND p.user_id = $1
+        WHERE m.is_draft = false OR (SELECT is_admin FROM users WHERE id = $1) = true
         GROUP BY m.id
         ORDER BY m.id ASC
       `, [userId]);
@@ -89,11 +85,11 @@ app.get('/lessons', authMiddleware, async (req, res) => {
   try {
     const client = await pool.connect();
     try {
-      let query = 'SELECT * FROM lessons';
-      let params = [];
+      let query = 'SELECT * FROM lessons WHERE (is_draft = false OR (SELECT is_admin FROM users WHERE id = $1) = true)';
+      let params = [req.user.id];
 
       if (module_id) {
-        query += ' WHERE module_id = $1';
+        query += ' AND module_id = $2';
         params.push(module_id);
       }
 
@@ -176,12 +172,12 @@ app.get('/users/me', authMiddleware, async (req, res) => {
     try {
       const result = await client.query(`
         SELECT 
-          u.id, u.name, u.email, u.created_at, u.profile_picture, u.streak_count, u.last_practice_date,
+          u.id, u.name, u.email, u.created_at, u.profile_picture, u.streak_count, u.last_practice_date, u.is_admin,
           (COALESCE(SUM(p.score), 0) + COALESCE((SELECT SUM(score) FROM quiz_progress qp WHERE qp.user_id = u.id), 0)) as total_score
         FROM users u
         LEFT JOIN progress p ON u.id = p.user_id
         WHERE u.id = $1
-        GROUP BY u.id, u.name, u.email, u.created_at, u.profile_picture, u.streak_count, u.last_practice_date
+        GROUP BY u.id, u.name, u.email, u.created_at, u.profile_picture, u.streak_count, u.last_practice_date, u.is_admin
       `, [userId]);
 
       if (result.rows.length === 0) {
@@ -321,9 +317,9 @@ app.get('/quiz/status', authMiddleware, async (req, res) => {
   let client;
   try {
     client = await pool.connect();
-    // Check if the user already played today
+    // Check if the user already played today (filtra apenas quiz, ignorando desafios práticos)
     const checkRes = await client.query(
-      'SELECT id FROM quiz_progress WHERE user_id = $1 AND DATE(created_at) = CURRENT_DATE LIMIT 1',
+      "SELECT id FROM quiz_progress WHERE user_id = $1 AND (type = 'quiz' OR type IS NULL) AND DATE(created_at) = CURRENT_DATE LIMIT 1",
       [userId]
     );
     const alreadyPlayed = checkRes.rows.length > 0;
@@ -346,9 +342,9 @@ app.post('/quiz/progress', authMiddleware, async (req, res) => {
   try {
     client = await pool.connect();
     
-    // Check limit
+    // Check limit (apenas quiz)
     const checkRes = await client.query(
-      'SELECT id FROM quiz_progress WHERE user_id = $1 AND DATE(created_at) = CURRENT_DATE LIMIT 1',
+      "SELECT id FROM quiz_progress WHERE user_id = $1 AND (type = 'quiz' OR type IS NULL) AND DATE(created_at) = CURRENT_DATE LIMIT 1",
       [userId]
     );
     if (checkRes.rows.length > 0) {
@@ -381,7 +377,7 @@ app.post('/quiz/progress', authMiddleware, async (req, res) => {
     }
 
     await client.query(
-      'INSERT INTO quiz_progress (user_id, score) VALUES ($1, $2)',
+      "INSERT INTO quiz_progress (user_id, score, type) VALUES ($1, $2, 'quiz')",
       [userId, finalScore]
     );
     
@@ -394,6 +390,60 @@ app.post('/quiz/progress', authMiddleware, async (req, res) => {
     console.error('Erro na rota /quiz/progress:', error);
     if (!res.headersSent) {
       return res.status(500).json({ message: 'Erro ao salvar quiz.' });
+    }
+  } finally {
+    if (client) client.release();
+  }
+});
+
+// --- Rota de Desafio Final Progress (Boss) ---
+app.post('/challenge/progress', authMiddleware, async (req, res) => {
+  const userId = req.user.id;
+  const { score, module_id } = req.body;
+  const finalScore = score || 50;
+  let client;
+  try {
+    client = await pool.connect();
+
+    // Atualiza ofensiva
+    const userRes = await client.query('SELECT streak_count, last_practice_date FROM users WHERE id = $1', [userId]);
+    let currentStreak = 0;
+    if (userRes.rows.length > 0) {
+      const user = userRes.rows[0];
+      const now = new Date();
+      const lastPractice = user.last_practice_date ? new Date(user.last_practice_date) : null;
+      
+      currentStreak = user.streak_count || 0;
+      if (!lastPractice) {
+        currentStreak = 1;
+      } else {
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const lastDay = new Date(lastPractice.getFullYear(), lastPractice.getMonth(), lastPractice.getDate());
+        const diffDays = Math.round((today - lastDay) / (1000 * 60 * 60 * 24));
+        
+        if (diffDays === 1) {
+          currentStreak += 1;
+        } else if (diffDays > 1) {
+          currentStreak = 1;
+        }
+      }
+      await client.query('UPDATE users SET streak_count = $1, last_practice_date = $2 WHERE id = $3', [currentStreak, now, userId]);
+    }
+
+    // Salva pontuação para contar no ranking e perfil com type = 'challenge'
+    await client.query(
+      "INSERT INTO quiz_progress (user_id, score, type, module_id) VALUES ($1, $2, 'challenge', $3)",
+      [userId, finalScore, module_id || null]
+    );
+
+    return res.status(201).json({
+      message: `Desafio final concluído! +${finalScore} XP!`,
+      streak_count: currentStreak
+    });
+  } catch (error) {
+    console.error('Erro na rota /challenge/progress:', error);
+    if (!res.headersSent) {
+      return res.status(500).json({ message: 'Erro ao salvar progresso do desafio.' });
     }
   } finally {
     if (client) client.release();
@@ -429,124 +479,82 @@ app.get('/ranking', authMiddleware, async (req, res) => {
   }
 });
 
-// --- Rota de Cadastro ---
-app.post('/users/register', async (req, res) => {
+// --- Rota Admin: Listar Todos os Usuários ---
+app.get('/admin/users', authMiddleware, async (req, res) => {
   try {
-    const { name, email, password } = req.body;
-
-    if (!name || !email || !password) {
-      return res.status(400).json({ message: 'Nome, e-mail e senha são obrigatórios.' });
-    }
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
-      return res.status(400).json({ message: 'Por favor, insira um e-mail válido (ex: nome@email.com).' });
-    }
-
-    // Aqui você pode adicionar a validação de senha forte se quiser
-
-    const salt = await bcrypt.genSalt(10);
-    const passwordHash = await bcrypt.hash(password, salt);
-
     const client = await pool.connect();
     try {
-      // Verifica email
-      const emailCheck = await client.query('SELECT * FROM users WHERE email = $1', [email]);
-      if (emailCheck.rows.length > 0) {
-        return res.status(409).json({ message: 'Este e-mail já está em uso.' });
-      }
-      
-      // Verifica nome
-      const nameCheck = await client.query('SELECT * FROM users WHERE name = $1', [name]);
-      if (nameCheck.rows.length > 0) {
-        return res.status(409).json({ message: 'Este nome de usuário já está em uso.' });
-      }
-
-      const result = await client.query(
-        'INSERT INTO users (name, email, password_hash) VALUES ($1, $2, $3) RETURNING id',
-        [name, email, passwordHash]
-      );
-      
-      const newUserId = result.rows[0].id;
-      
-      res.status(201).json({ 
-        message: 'Usuário cadastrado com sucesso!', 
-        userId: newUserId 
-      });
-
-    } catch (dbError) {
-      if (dbError.code === '23505') {
-         if (dbError.constraint === 'users_email_key') return res.status(409).json({ message: 'Este e-mail já está em uso.' });
-         if (dbError.constraint === 'users_name_unique') return res.status(409).json({ message: 'Este nome de usuário já está em uso.' });
-      }
-      console.error('Erro no banco de dados:', dbError);
-      res.status(500).json({ message: 'Erro ao salvar usuário no banco.' });
+      const result = await client.query(`
+        SELECT 
+          id, 
+          name, 
+          email, 
+          created_at, 
+          profile_picture, 
+          streak_count, 
+          last_practice_date 
+        FROM users 
+        ORDER BY created_at DESC
+      `);
+      res.status(200).json(result.rows);
     } finally {
       client.release();
     }
-    
   } catch (error) {
-    console.error('Erro geral no servidor:', error);
-    res.status(500).json({ message: 'Erro no servidor' });
+    console.error('Erro ao listar usuários:', error);
+    res.status(500).json({ message: 'Erro ao listar usuários.' });
   }
 });
 
-// --- Rota de Login ---
-app.post('/users/login', async (req, res) => {
+// --- Rota Admin: Excluir Usuário (Banir) ---
+app.delete('/admin/users/:id', authMiddleware, async (req, res) => {
+  const userIdToDelete = req.params.id;
   try {
-    const { email, password } = req.body;
-
-    if (!email || !password) {
-      return res.status(400).json({ message: 'E-mail e senha são obrigatórios.' });
-    }
-
     const client = await pool.connect();
     try {
-      const result = await client.query('SELECT * FROM users WHERE email = $1', [email]);
-      
-      if (result.rows.length === 0) {
-        return res.status(401).json({ message: 'E-mail ou senha inválidos.' });
+      // Deleta usuário (progresso é apagado por CASCADE no banco)
+      const result = await client.query('DELETE FROM users WHERE id = $1 RETURNING id', [userIdToDelete]);
+      if (result.rowCount === 0) {
+        return res.status(404).json({ message: 'Usuário não encontrado.' });
       }
+      res.status(200).json({ message: 'Usuário excluído com sucesso.' });
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error('Erro ao excluir usuário:', error);
+    res.status(500).json({ message: 'Erro ao excluir usuário.' });
+  }
+});
 
-      const user = result.rows[0];
-      const isPasswordCorrect = await bcrypt.compare(password, user.password_hash);
-
-      if (!isPasswordCorrect) {
-        return res.status(401).json({ message: 'E-mail ou senha inválidos.' });
-      }
-
-      const payload = {
-        id: user.id,
-        email: user.email,
-      };
+// --- Rota Admin: Estatísticas Globais do Dashboard ---
+app.get('/admin/stats', authMiddleware, async (req, res) => {
+  try {
+    const client = await pool.connect();
+    try {
+      const totalUsersRes = await client.query('SELECT COUNT(*) as count FROM users');
+      const activeUsersRes = await client.query('SELECT COUNT(*) as count FROM users WHERE last_practice_date >= CURRENT_DATE - INTERVAL \'1 day\'');
+      const streaksRes = await client.query('SELECT COUNT(*) as count FROM users WHERE streak_count > 0');
       
-      const token = jwt.sign(
-        payload, 
-        process.env.JWT_SECRET, 
-        { expiresIn: '1d' }
-      );
-
+      const totalUsers = parseInt(totalUsersRes.rows[0].count);
+      const accessesToday = parseInt(activeUsersRes.rows[0].count);
+      const totalStreaks = parseInt(streaksRes.rows[0].count);
+      
       res.status(200).json({
-        message: 'Login bem-sucedido!',
-        token: token,
-        user: {
-          id: user.id,
-          name: user.name,
-          email: user.email,
-        },
+        total_users: totalUsers,
+        accesses_today: accessesToday,
+        total_streaks: totalStreaks
       });
-
-    } catch (dbError) {
-      console.error('Erro no banco de dados:', dbError);
-      res.status(500).json({ message: 'Erro ao tentar logar usuário.' });
     } finally {
       client.release();
     }
-
   } catch (error) {
-    console.error('Erro geral no servidor:', error);
-    res.status(500).json({ message: 'Erro no servidor' });
+    console.error('Erro no admin stats:', error);
+    res.status(500).json({ message: 'Erro ao buscar estatísticas.' });
   }
 });
+
+// ROTAS DE LOGIN E REGISTER FORAM REMOVIDAS (Agora gerenciadas pelo Supabase Auth)
 
 app.put('/users/me', authMiddleware, async (req, res) => {
   const userId = req.user.id;
