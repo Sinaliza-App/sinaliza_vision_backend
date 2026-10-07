@@ -396,6 +396,60 @@ app.post('/quiz/progress', authMiddleware, async (req, res) => {
   }
 });
 
+// --- Rota de Desafio Final Progress (Boss) ---
+app.post('/challenge/progress', authMiddleware, async (req, res) => {
+  const userId = req.user.id;
+  const { score, module_id } = req.body;
+  const finalScore = score || 50;
+  let client;
+  try {
+    client = await pool.connect();
+
+    // Atualiza ofensiva
+    const userRes = await client.query('SELECT streak_count, last_practice_date FROM users WHERE id = $1', [userId]);
+    let currentStreak = 0;
+    if (userRes.rows.length > 0) {
+      const user = userRes.rows[0];
+      const now = new Date();
+      const lastPractice = user.last_practice_date ? new Date(user.last_practice_date) : null;
+      
+      currentStreak = user.streak_count || 0;
+      if (!lastPractice) {
+        currentStreak = 1;
+      } else {
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const lastDay = new Date(lastPractice.getFullYear(), lastPractice.getMonth(), lastPractice.getDate());
+        const diffDays = Math.round((today - lastDay) / (1000 * 60 * 60 * 24));
+        
+        if (diffDays === 1) {
+          currentStreak += 1;
+        } else if (diffDays > 1) {
+          currentStreak = 1;
+        }
+      }
+      await client.query('UPDATE users SET streak_count = $1, last_practice_date = $2 WHERE id = $3', [currentStreak, now, userId]);
+    }
+
+    // Salva pontuação para contar no ranking e perfil
+    await client.query(
+      'INSERT INTO quiz_progress (user_id, score) VALUES ($1, $2)',
+      [userId, finalScore]
+    );
+
+    return res.status(201).json({
+      message: `Desafio final concluído! +${finalScore} XP!`,
+      streak_count: currentStreak
+    });
+  } catch (error) {
+    console.error('Erro na rota /challenge/progress:', error);
+    if (!res.headersSent) {
+      return res.status(500).json({ message: 'Erro ao salvar progresso do desafio.' });
+    }
+  } finally {
+    if (client) client.release();
+  }
+});
+
 // --- Rota de Ranking ---
 app.get('/ranking', authMiddleware, async (req, res) => {
   try {

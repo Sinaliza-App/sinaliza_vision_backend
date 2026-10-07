@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 import os
+import uuid
 # pyrefly: ignore [missing-import]
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, text
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -9,8 +10,9 @@ Base = declarative_base()
 class FeedbackSample(Base):
     __tablename__ = "feedback_samples"
     
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    raw_file_path = Column(String, nullable=False)
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(Integer, nullable=True)
+    raw_file_path = Column(String, nullable=True)
     predicted_class = Column(String, nullable=False)
     corrected_class = Column(String, nullable=False)
     mode = Column(String, default="dinamico", nullable=True)  # "dinamico" ou "alfabeto"
