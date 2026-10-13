@@ -1,0 +1,82 @@
+=====================================================================
+          COMO FUNCIONA O SCRIPT DE COLETA DE DADOS (LIBRAS)
+=====================================================================
+
+Este script (coletar_dados.py) é a ferramenta responsável por criar o 
+nosso dataset de Libras. Em vez de salvar vídeos pesados (como MP4), ele 
+usa inteligência artificial para rastrear o corpo do usuário e salvar 
+apenas as coordenadas dos movimentos das mãos e corpo em arquivos muito 
+leves (.npy).
+
+Abaixo está a explicação detalhada de como ele funciona para você e seus 
+amigos entenderem e usarem!
+
+---
+
+1. O QUE SÃO OS DADOS COLETADOS (KEYPOINTS)?
+---------------------------------------------------------------------
+O script utiliza uma biblioteca do Google chamada MediaPipe Holistic. Ela
+identifica "pontos chave" (keypoints) em tempo real:
+- Pose: 33 pontos no corpo (ombros, cotovelos, braços, etc.).
+- Mão Esquerda: 21 pontos detalhando cada articulação dos dedos.
+- Mão Direita: 21 pontos detalhando cada articulação dos dedos.
+- Rosto (opcional): 468 pontos detalhando a expressão facial.
+
+A cada frame, o script junta todas as coordenadas X, Y e Z desses pontos 
+em uma única linha (vetor) e salva isso. Esse vetor serve de alimento 
+para treinar a nossa IA (normalmente uma rede neural LSTM).
+
+---
+
+2. O FLUXO DE GRAVAÇÃO (PASSO A PASSO)
+---------------------------------------------------------------------
+Quando você roda o script, ele faz o seguinte para cada sinal (ex: "bom_dia", "pedir_ajuda"):
+
+Passo A: Check Inteligente
+- Antes de iniciar a gravação de uma tentativa, o script olha na pasta se 
+  aquela tentativa já existe.
+- Se já existir, ele pula direto para a próxima. Isso é ótimo porque se o 
+  script fechar ou o computador travar, você não perde nada do que já gravou!
+
+Passo B: Prepare-se (Pausa entre gravações)
+- A tela pisca em amarelo com a mensagem "PREPARE-SE PARA: SINAL".
+- Você tem 30 frames (cerca de 1 a 2 segundos) para olhar para a câmera, 
+  se posicionar e respirar antes do início da captura.
+
+Passo C: Gravação Ativa
+- A tela fica com letras vermelhas escrito "GRAVANDO...".
+- O script captura exatamente 30 frames sequenciais (1 vídeo/tentativa).
+- Em cada frame, ele calcula a posição das mãos/corpo e salva no computador.
+
+---
+
+3. CONTROLES NA TELA (MUITO ÚTIL)
+---------------------------------------------------------------------
+Durante a captura, você pode controlar o script pelas teclas:
+- Tecla [R] (Refazer): Se você errar o sinal no meio da gravação, aperte 'R'. 
+  O script apagará os arquivos parciais daquela tentativa e permitirá que você 
+  grave a mesma tentativa de novo imediatamente.
+- Tecla [Q] (Sair): Fecha o script com segurança, liberando a câmera.
+
+---
+
+4. CONFIGURAÇÕES QUE VOCÊ PODE AJUSTAR
+---------------------------------------------------------------------
+No início do arquivo "coletar_dados.py", você pode alterar:
+- num_videos: Quantas vezes você quer repetir cada sinal (padrão é 30).
+- num_frames: A duração de cada sinal (padrão é 30 frames).
+- COLETAR_ROSTO: Se mudar para False, desativa o rastreio do rosto. Isso deixa 
+  os arquivos 85% mais leves e acelera muito o treinamento da IA.
+- SALVAR_COMO_SEQUENCIA: Se mudar para True, ele salva 1 arquivo único por 
+  vídeo contendo os 30 frames (deixa a pasta do dataset muito mais organizada).
+
+---
+
+5. COMO RODAR O SCRIPT (PRÉ-REQUISITOS)
+---------------------------------------------------------------------
+Certifique-se de que está rodando dentro do ambiente virtual configurado.
+No terminal do projeto, execute:
+
+  uv run python coletar_dados.py
+
+Bons treinos e boa coleta! 🤟
