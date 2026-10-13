@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS public.feedback_samples (
     auth_id UUID REFERENCES auth.users(id) ON DELETE SET NULL,
     sign_name VARCHAR(100) NOT NULL,
     mode VARCHAR(20) DEFAULT 'dinamico', -- 'dinamico' (30 frames) ou 'alfabeto' (20 frames)
-    raw_landmarks JSONB NOT NULL,        -- Matriz de keypoints 258 features
+    raw_landmarks JSONB,                 -- Matriz de keypoints 258 features
     status VARCHAR(20) DEFAULT 'pendente', -- 'pendente', 'validado', 'rejeitado'
     reporter_role VARCHAR(20) DEFAULT 'aluno', -- 'aluno' ou 'professor'
     corrected_sign VARCHAR(100),
@@ -45,6 +45,15 @@ CREATE TABLE IF NOT EXISTS public.feedback_samples (
     created_at TIMESTAMP DEFAULT now(),
     evaluated_at TIMESTAMP
 );
+
+-- Garante todas as colunas caso a tabela já existisse previamente
+ALTER TABLE public.feedback_samples ADD COLUMN IF NOT EXISTS auth_id UUID;
+ALTER TABLE public.feedback_samples ADD COLUMN IF NOT EXISTS mode VARCHAR(20) DEFAULT 'dinamico';
+ALTER TABLE public.feedback_samples ADD COLUMN IF NOT EXISTS raw_landmarks JSONB;
+ALTER TABLE public.feedback_samples ADD COLUMN IF NOT EXISTS evaluator_id INT;
+ALTER TABLE public.feedback_samples ADD COLUMN IF NOT EXISTS evaluator_notes TEXT;
+ALTER TABLE public.feedback_samples ADD COLUMN IF NOT EXISTS evaluated_at TIMESTAMP;
+ALTER TABLE public.feedback_samples ADD COLUMN IF NOT EXISTS device_info VARCHAR(50) DEFAULT 'mobile';
 
 CREATE INDEX IF NOT EXISTS idx_feedback_samples_status ON public.feedback_samples(status);
 CREATE INDEX IF NOT EXISTS idx_feedback_samples_sign ON public.feedback_samples(sign_name);
