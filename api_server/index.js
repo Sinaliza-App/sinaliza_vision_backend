@@ -173,11 +173,12 @@ app.get('/users/me', authMiddleware, async (req, res) => {
       const result = await client.query(`
         SELECT 
           u.id, u.name, u.email, u.created_at, u.profile_picture, u.streak_count, u.last_practice_date, u.is_admin,
+          COALESCE(u.role, CASE WHEN u.is_admin = true THEN 'admin' ELSE 'student' END) as role,
           (COALESCE(SUM(p.score), 0) + COALESCE((SELECT SUM(score) FROM quiz_progress qp WHERE qp.user_id = u.id), 0)) as total_score
         FROM users u
         LEFT JOIN progress p ON u.id = p.user_id
         WHERE u.id = $1
-        GROUP BY u.id, u.name, u.email, u.created_at, u.profile_picture, u.streak_count, u.last_practice_date, u.is_admin
+        GROUP BY u.id, u.name, u.email, u.created_at, u.profile_picture, u.streak_count, u.last_practice_date, u.is_admin, u.role
       `, [userId]);
 
       if (result.rows.length === 0) {
@@ -479,20 +480,28 @@ app.get('/ranking', authMiddleware, async (req, res) => {
   }
 });
 
-// --- Rota Admin: Listar Todos os Usuários ---
+// --- Rota Admin/Teacher: Listar Todos os Usuários ---
 app.get('/admin/users', authMiddleware, async (req, res) => {
+  const isAuthorized = req.user.role === 'teacher' || req.user.role === 'admin' || req.user.is_admin;
+  if (!isAuthorized) {
+    return res.status(403).json({ message: 'Acesso negado: Apenas professores e administradores podem listar usuários.' });
+  }
+
   try {
     const client = await pool.connect();
     try {
       const result = await client.query(`
         SELECT 
           id, 
+          auth_id,
           name, 
           email, 
           created_at, 
           profile_picture, 
           streak_count, 
-          last_practice_date 
+          last_practice_date,
+          is_admin,
+          COALESCE(role, CASE WHEN is_admin = true THEN 'admin' ELSE 'student' END) AS role
         FROM users 
         ORDER BY created_at DESC
       `);
@@ -506,8 +515,55 @@ app.get('/admin/users', authMiddleware, async (req, res) => {
   }
 });
 
-// --- Rota Admin: Excluir Usuário (Banir) ---
+// --- Rota Admin: Alterar Papel do Usuário (EXCLUSIVO ADMIN) ---
+app.put('/admin/users/:id/role', authMiddleware, async (req, res) => {
+  if (req.user.role !== 'admin' && !req.user.is_admin) {
+    return res.status(403).json({ message: 'Acesso negado: Apenas administradores gerais podem alterar privilégios.' });
+  }
+
+  const userIdToUpdate = req.params.id;
+  const { role } = req.body;
+
+  if (!['student', 'teacher', 'admin'].includes(role)) {
+    return res.status(400).json({ message: "Papel inválido. Opções válidas: 'student', 'teacher', 'admin'." });
+  }
+
+  const isAdmin = (role === 'admin');
+
+  try {
+    const client = await pool.connect();
+    try {
+      const result = await client.query(
+        'UPDATE users SET role = $1, is_admin = $2 WHERE id = $3 RETURNING id, name, role, is_admin',
+        [role, isAdmin, userIdToUpdate]
+      );
+
+      if (result.rowCount === 0) {
+        return res.status(404).json({ message: 'Usuário não encontrado.' });
+      }
+
+      res.status(200).json({
+        message: `Papel do usuário atualizado para ${role.toUpperCase()} com sucesso.`,
+        user: result.rows[0]
+      });
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error('Erro ao atualizar papel do usuário:', error);
+    res.status(500).json({ message: 'Erro ao atualizar privilégios do usuário.' });
+  }
+});
+
+// --- Rota Admin: Excluir Usuário (Banir) (EXCLUSIVO ADMIN) ---
 app.delete('/admin/users/:id', authMiddleware, async (req, res) => {
+  // SEGURANÇA: Professores NÃO podem banir contas! Apenas administradores do sistema.
+  if (req.user.role !== 'admin' && !req.user.is_admin) {
+    return res.status(403).json({ 
+      message: 'Acesso negado: Professores não têm permissão para excluir contas de alunos. Apenas Administradores do Sistema podem banir contas.' 
+    });
+  }
+
   const userIdToDelete = req.params.id;
   try {
     const client = await pool.connect();
@@ -517,7 +573,7 @@ app.delete('/admin/users/:id', authMiddleware, async (req, res) => {
       if (result.rowCount === 0) {
         return res.status(404).json({ message: 'Usuário não encontrado.' });
       }
-      res.status(200).json({ message: 'Usuário excluído com sucesso.' });
+      res.status(200).json({ message: 'Usuário excluído com sucesso pelo administrador.' });
     } finally {
       client.release();
     }
@@ -633,6 +689,307 @@ app.delete('/users/me', authMiddleware, async (req, res) => {
     res.status(500).json({ message: 'Erro no servidor.' });
   }
 });
+
+// ==============================================================================
+// --- ROTAS DO PIPELINE DE COLETA & FEEDBACK DE DADOS PARA TREINAMENTO DE IA ---
+// ==============================================================================
+
+// 1. Enviar nova amostra gravada (Mobile App ou Web Data Studio)
+app.post('/coleta/amostra', authMiddleware, async (req, res) => {
+  const userId = req.user.id;
+  const authId = req.user.auth_id;
+  const { sign_name, mode, raw_landmarks, source, reporter_role } = req.body;
+
+  if (!sign_name || typeof sign_name !== 'string') {
+    return res.status(400).json({ message: 'O nome do sinal (sign_name) é obrigatório.' });
+  }
+
+  if (!raw_landmarks || !Array.isArray(raw_landmarks) || raw_landmarks.length === 0) {
+    return res.status(400).json({ message: 'Sequência de keypoints (raw_landmarks) vazia ou inválida.' });
+  }
+
+  const role = reporter_role || req.user.role || 'aluno';
+  const isTeacher = role === 'professor' || req.user.role === 'teacher' || req.user.role === 'admin' || req.user.is_admin;
+  const targetStatus = isTeacher ? 'validado' : 'pendente';
+  const targetMode = mode || (raw_landmarks.length === 20 ? 'alfabeto' : 'dinamico');
+
+  let client;
+  try {
+    client = await pool.connect();
+    
+    // Grava no banco de feedback/coleta
+    const insertRes = await client.query(`
+      INSERT INTO feedback_samples (
+        user_id, auth_id, sign_name, mode, raw_landmarks, status, 
+        reporter_role, device_info, created_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+      RETURNING id, status
+    `, [
+      userId, 
+      authId, 
+      sign_name.trim().toLowerCase(), 
+      targetMode, 
+      JSON.stringify(raw_landmarks), 
+      targetStatus, 
+      isTeacher ? 'professor' : 'aluno', 
+      source || 'mobile'
+    ]);
+
+    const sampleId = insertRes.rows[0].id;
+    let earnedXp = 0;
+
+    // Se enviado por um estudante, recompensa com +10 XP no progresso geral
+    if (!isTeacher) {
+      earnedXp = 10;
+      try {
+        await client.query(`
+          INSERT INTO quiz_progress (user_id, score, type) 
+          VALUES ($1, $2, 'dataset_contribution')
+        `, [userId, earnedXp]);
+      } catch (scoreErr) {
+        console.warn('Aviso: Não foi possível computar XP na tabela quiz_progress:', scoreErr.message);
+      }
+    }
+
+    return res.status(201).json({
+      success: true,
+      message: isTeacher 
+        ? 'Amostra docente registrada com selo de validada!' 
+        : `Amostra enviada para revisão do professor! +${earnedXp} XP`,
+      sample_id: sampleId,
+      status: targetStatus,
+      xp_awarded: earnedXp
+    });
+
+  } catch (error) {
+    console.error('Erro na rota /coleta/amostra:', error);
+    return res.status(500).json({ message: 'Erro ao registrar amostra no banco de dados: ' + error.message });
+  } finally {
+    if (client) client.release();
+  }
+});
+
+// 2. Listar amostras para curadoria (Exclusivo Professores e Admins)
+app.get('/coleta/amostras', authMiddleware, async (req, res) => {
+  const isAuthorized = req.user.role === 'teacher' || req.user.role === 'admin' || req.user.is_admin;
+  if (!isAuthorized) {
+    return res.status(403).json({ message: 'Acesso negado: Recurso exclusivo para educadores e administradores.' });
+  }
+
+  const { status, sign_name, limit = 50, offset = 0 } = req.query;
+  let client;
+  try {
+    client = await pool.connect();
+    let query = `
+      SELECT 
+        fs.id,
+        fs.user_id,
+        fs.sign_name,
+        fs.mode,
+        fs.status,
+        fs.reporter_role,
+        fs.corrected_sign,
+        fs.device_info,
+        fs.created_at,
+        fs.evaluated_at,
+        u.name as student_name,
+        u.email as student_email,
+        jsonb_array_length(fs.raw_landmarks) as frame_count
+      FROM feedback_samples fs
+      LEFT JOIN users u ON fs.user_id = u.id
+      WHERE 1=1
+    `;
+    const params = [];
+
+    if (status && status !== 'all') {
+      params.push(status);
+      query += ` AND fs.status = $${params.length}`;
+    }
+
+    if (sign_name) {
+      params.push(sign_name.trim().toLowerCase());
+      query += ` AND fs.sign_name = $${params.length}`;
+    }
+
+    query += ` ORDER BY fs.created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+    params.push(parseInt(limit), parseInt(offset));
+
+    const result = await client.query(query, params);
+    return res.status(200).json(result.rows);
+
+  } catch (error) {
+    console.error('Erro ao listar amostras:', error);
+    return res.status(500).json({ message: 'Erro ao listar amostras para curadoria: ' + error.message });
+  } finally {
+    if (client) client.release();
+  }
+});
+
+// 3. Avaliar amostra: Aprovar, Corrigir ou Rejeitar (Exclusivo Professores e Admins)
+app.patch('/coleta/amostras/:id/avaliar', authMiddleware, async (req, res) => {
+  const isAuthorized = req.user.role === 'teacher' || req.user.role === 'admin' || req.user.is_admin;
+  if (!isAuthorized) {
+    return res.status(403).json({ message: 'Acesso negado: Recurso exclusivo para educadores e administradores.' });
+  }
+
+  const sampleId = req.params.id;
+  const { status, corrected_sign, evaluator_notes } = req.body;
+
+  if (!['validado', 'rejeitado', 'pendente'].includes(status)) {
+    return res.status(400).json({ message: "Status inválido. Escolha 'validado', 'rejeitado' ou 'pendente'." });
+  }
+
+  let client;
+  try {
+    client = await pool.connect();
+    const updateRes = await client.query(`
+      UPDATE feedback_samples 
+      SET 
+        status = $1,
+        corrected_sign = COALESCE($2, corrected_sign),
+        evaluator_id = $3,
+        evaluator_notes = $4,
+        evaluated_at = NOW()
+      WHERE id = $5
+      RETURNING id, status, corrected_sign
+    `, [status, corrected_sign || null, req.user.id, evaluator_notes || null, sampleId]);
+
+    if (updateRes.rowCount === 0) {
+      return res.status(404).json({ message: 'Amostra não encontrada.' });
+    }
+
+    return res.status(200).json({
+      message: `Amostra #${sampleId} marcada como ${status.toUpperCase()}!`,
+      sample: updateRes.rows[0]
+    });
+
+  } catch (error) {
+    console.error('Erro ao avaliar amostra:', error);
+    return res.status(500).json({ message: 'Erro ao registrar avaliação da amostra.' });
+  } finally {
+    if (client) client.release();
+  }
+});
+
+// 4. Estatísticas de Coleta e Metas por Classe
+app.get('/coleta/stats', authMiddleware, async (req, res) => {
+  const isAuthorized = req.user.role === 'teacher' || req.user.role === 'admin' || req.user.is_admin;
+  if (!isAuthorized) {
+    return res.status(403).json({ message: 'Acesso negado.' });
+  }
+
+  let client;
+  try {
+    client = await pool.connect();
+    
+    // Totalizadores gerais
+    const totalsRes = await client.query(`
+      SELECT 
+        COUNT(*)::int as total_samples,
+        COUNT(CASE WHEN status = 'pendente' THEN 1 END)::int as pending_count,
+        COUNT(CASE WHEN status = 'validado' THEN 1 END)::int as validated_count,
+        COUNT(CASE WHEN status = 'rejeitado' THEN 1 END)::int as rejected_count
+      FROM feedback_samples
+    `);
+
+    // Contagem por sinal validado
+    const perSignRes = await client.query(`
+      SELECT 
+        COALESCE(corrected_sign, sign_name) as sign_name,
+        mode,
+        COUNT(*)::int as total_collected,
+        COUNT(CASE WHEN status = 'validado' THEN 1 END)::int as validated_samples,
+        COUNT(CASE WHEN status = 'pendente' THEN 1 END)::int as pending_samples
+      FROM feedback_samples
+      GROUP BY COALESCE(corrected_sign, sign_name), mode
+      ORDER BY validated_samples DESC, total_collected DESC
+    `);
+
+    return res.status(200).json({
+      overview: totalsRes.rows[0] || { total_samples: 0, pending_count: 0, validated_count: 0, rejected_count: 0 },
+      per_sign: perSignRes.rows || []
+    });
+
+  } catch (error) {
+    console.error('Erro ao buscar estatísticas de coleta:', error);
+    return res.status(500).json({ message: 'Erro ao carregar métricas do dataset: ' + error.message });
+  } finally {
+    if (client) client.release();
+  }
+});
+
+// 5. Exportar Manifesto do Dataset para Retreinamento Local (Python)
+app.get('/coleta/exportar-manifesto', authMiddleware, async (req, res) => {
+  const isAuthorized = req.user.role === 'teacher' || req.user.role === 'admin' || req.user.is_admin;
+  if (!isAuthorized) {
+    return res.status(403).json({ message: 'Acesso negado.' });
+  }
+
+  let client;
+  try {
+    client = await pool.connect();
+    const result = await client.query(`
+      SELECT 
+        id,
+        COALESCE(corrected_sign, sign_name) as sign_name,
+        mode,
+        raw_landmarks,
+        created_at
+      FROM feedback_samples
+      WHERE status = 'validado'
+      ORDER BY id ASC
+    `);
+
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', 'attachment; filename="sinaliza_validated_dataset.json"');
+    return res.status(200).json({
+      exported_at: new Date().toISOString(),
+      total_validated: result.rows.length,
+      samples: result.rows
+    });
+
+  } catch (error) {
+    console.error('Erro ao exportar manifesto:', error);
+    return res.status(500).json({ message: 'Erro ao gerar exportação do dataset.' });
+  } finally {
+    if (client) client.release();
+  }
+});
+
+// 6. Verificar Código Institucional de Professor
+app.post('/auth/verify-teacher-code', async (req, res) => {
+  const { code } = req.body;
+  if (!code) {
+    return res.status(400).json({ valid: false, message: 'Código não informado.' });
+  }
+  const defaultCode = process.env.TEACHER_ACCESS_CODE || 'PROF-SINALIZA-2026';
+  const isValid = code.trim().toUpperCase() === defaultCode.toUpperCase();
+  return res.status(200).json({ valid: isValid });
+});
+
+// 7. Reivindicar papel de Professor com Código Institucional
+app.post('/auth/claim-teacher', authMiddleware, async (req, res) => {
+  const { code } = req.body;
+  const defaultCode = process.env.TEACHER_ACCESS_CODE || 'PROF-SINALIZA-2026';
+
+  if (!code || code.trim().toUpperCase() !== defaultCode.toUpperCase()) {
+    return res.status(400).json({ message: 'Código de autorização docente inválido.' });
+  }
+
+  let client;
+  try {
+    client = await pool.connect();
+    await client.query("UPDATE users SET role = 'teacher' WHERE id = $1", [req.user.id]);
+    return res.status(200).json({ message: 'Permissão docente concedida com sucesso!' });
+  } catch (err) {
+    console.error('Erro ao atualizar papel:', err);
+    return res.status(500).json({ message: 'Erro ao processar solicitação.' });
+  } finally {
+    if (client) client.release();
+  }
+});
+
 // --- DEBUG: TESTE DE CONEXÃO AO INICIAR ---
 (async () => {
   try {
