@@ -737,26 +737,13 @@ app.post('/coleta/amostra', authMiddleware, async (req, res) => {
     ]);
 
     const sampleId = insertRes.rows[0].id;
-    let earnedXp = 0;
-
-    // Se enviado por um estudante, recompensa com +10 XP no progresso geral
-    if (!isTeacher) {
-      earnedXp = 10;
-      try {
-        await client.query(`
-          INSERT INTO quiz_progress (user_id, score, type) 
-          VALUES ($1, $2, 'dataset_contribution')
-        `, [userId, earnedXp]);
-      } catch (scoreErr) {
-        console.warn('Aviso: Não foi possível computar XP na tabela quiz_progress:', scoreErr.message);
-      }
-    }
+    const earnedXp = 0;
 
     return res.status(201).json({
       success: true,
       message: isTeacher 
         ? 'Amostra docente registrada com selo de validada!' 
-        : `Amostra enviada para revisão do professor! +${earnedXp} XP`,
+        : 'Amostra enviada para revisão do professor! Obrigado pela contribuição!',
       sample_id: sampleId,
       status: targetStatus,
       xp_awarded: earnedXp
