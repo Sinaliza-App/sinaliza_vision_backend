@@ -950,27 +950,56 @@ app.post('/auth/verify-teacher-code', async (req, res) => {
   if (!code) {
     return res.status(400).json({ valid: false, message: 'Código não informado.' });
   }
-  const defaultCode = process.env.TEACHER_ACCESS_CODE || 'PROF-SINALIZA-2026';
-  const isValid = code.trim().toUpperCase() === defaultCode.toUpperCase();
-  return res.status(200).json({ valid: isValid });
+
+  let client;
+  try {
+    client = await pool.connect();
+    const result = await client.query(
+      'SELECT id, role, description FROM institution_codes WHERE code = $1 AND is_active = TRUE',
+      [code.trim().toUpperCase()]
+    );
+    const isValid = result.rows.length > 0;
+    return res.status(200).json({ 
+      valid: isValid, 
+      role: isValid ? result.rows[0].role : null,
+      message: isValid ? 'Código institucional validado com sucesso.' : 'Código institucional inválido ou expirado.' 
+    });
+  } catch (err) {
+    console.error('Erro ao validar código institucional:', err);
+    return res.status(500).json({ valid: false, message: 'Erro ao validar código.' });
+  } finally {
+    if (client) client.release();
+  }
 });
 
 // 7. Reivindicar papel de Professor com Código Institucional
 app.post('/auth/claim-teacher', authMiddleware, async (req, res) => {
   const { code } = req.body;
-  const defaultCode = process.env.TEACHER_ACCESS_CODE || 'PROF-SINALIZA-2026';
-
-  if (!code || code.trim().toUpperCase() !== defaultCode.toUpperCase()) {
-    return res.status(400).json({ message: 'Código de autorização docente inválido.' });
+  if (!code) {
+    return res.status(400).json({ message: 'Código de autorização docente não informado.' });
   }
 
   let client;
   try {
     client = await pool.connect();
-    await client.query("UPDATE users SET role = 'teacher' WHERE id = $1", [req.user.id]);
-    return res.status(200).json({ message: 'Permissão docente concedida com sucesso!' });
+    const result = await client.query(
+      'SELECT role FROM institution_codes WHERE code = $1 AND is_active = TRUE',
+      [code.trim().toUpperCase()]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(400).json({ message: 'Código de autorização docente inválido ou expirado.' });
+    }
+
+    const assignedRole = result.rows[0].role || 'teacher';
+    await client.query("UPDATE users SET role = $1 WHERE id = $2", [assignedRole, req.user.id]);
+    return res.status(200).json({ 
+      success: true, 
+      role: assignedRole,
+      message: 'Permissão de professor concedida com sucesso!' 
+    });
   } catch (err) {
-    console.error('Erro ao atualizar papel:', err);
+    console.error('Erro ao atualizar papel do usuário:', err);
     return res.status(500).json({ message: 'Erro ao processar solicitação.' });
   } finally {
     if (client) client.release();
