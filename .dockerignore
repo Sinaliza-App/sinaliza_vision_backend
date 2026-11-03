@@ -1,0 +1,13 @@
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+api_server/node_modules
+dataset/
+*.db
+.git
+.gitignore

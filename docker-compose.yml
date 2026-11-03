@@ -1,0 +1,26 @@
+# =========================================================================
+# DOCKER COMPOSE - BACKEND SUITE (API Node.js + Visão Computacional Python)
+# =========================================================================
+services:
+  # 1. API Node.js (Express + Swagger + Supabase)
+  sinaliza-api:
+    build:
+      context: ./api_server
+      dockerfile: Dockerfile
+    container_name: sinaliza-api-node
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      - NODE_ENV=development
+
+  # 2. API Python (FastAPI + Feedback Loop de IA)
+  sinaliza-vision:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sinaliza-vision-python
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
